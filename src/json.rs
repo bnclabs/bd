@@ -4,10 +4,6 @@ pub struct Lex{ offset: i32, row: i32, col: i32 };
 
 pub type Result = Result<(Json, &str), Error>
 
-pub enum Error {
-    InvalidInput,
-}
-
 pub enum Json<'a> {
     // unparsed
     Raw(&'a str),
@@ -19,6 +15,15 @@ pub enum Json<'a> {
     String(&'a str),
     Array(Vec<Json<'a>>),
     Object(HashMap<&'a str, Json<'a>>),
+}
+
+impl Json {
+    pub fn new(text: &str) -> Json {
+        Json::Raw(text)
+    }
+
+    pub fn validate() {
+    }
 }
 
 pub fn parse(text: &str) -> Result {

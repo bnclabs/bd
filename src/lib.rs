@@ -1,4 +1,4 @@
-mod json;
+pub mod jsonpointer;
 
 #[cfg(test)]
 mod tests {
