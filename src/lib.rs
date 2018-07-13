@@ -9,6 +9,19 @@ pub mod json;
 mod tests {
     use test::Bencher;
 
+    #[test]
+    fn test_codepoint() {
+        let s = "å".to_string();
+        let mut chars = s.chars();
+        assert_eq!('a', chars.next().unwrap());
+        assert_eq!('\u{30a}', chars.next().unwrap());
+
+        let mut s = String::new();
+        s.push_str("\u{0061}");
+        s.push_str("\u{030a}");
+        assert_eq!("å", s);
+    }
+
     #[bench]
     fn bench_string_copy_1K(b: &mut Bencher) {
         let mut s = String::with_capacity(1000);

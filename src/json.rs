@@ -24,15 +24,16 @@ impl Lex {
 
 pub struct JsonBuf {
     inner: String,
+    codepoint: String,
 }
 
 impl JsonBuf {
     pub fn new() -> JsonBuf {
-        JsonBuf{ inner: String::new() }
+        JsonBuf{ inner: String::new(), codepoint: String::with_capacity(16) }
     }
 
     pub fn set<T>(&mut self, text: &T) where T: AsRef<str> + ?Sized {
-        self.inner.truncate(0);
+        self.inner.clear();
         self.inner.push_str(text.as_ref())
     }
 
@@ -51,7 +52,7 @@ impl JsonBuf {
             't' => self.sanitize_true(&mut lex)?,
             'f' => self.sanitize_false(&mut lex)?,
             '0'..='9'|'+'|'-'|'.'|'e'|'E' => self.sanitize_num(&mut lex)?,
-            //'"' => validate_string(lex)),
+            '"' => self.sanitize_string(&mut lex)?,
             //'[' => validate_array(lex)),
             //'{' => Some(parse_object(lex)),
             _ => return Err(InvalidToken(lex.off, lex.row, lex.col)),
@@ -162,6 +163,59 @@ impl JsonBuf {
         panic!("invalid json");
     }
 
+    fn sanitize_string(&mut self, lex: &mut Lex) -> Result<Json> {
+        use ::json::Error::InvalidToken;
+
+        let mut s = String::new();
+        let mut esc = false;
+        let mut chars = self.inner[lex.off..].chars().enumerate();
+        self.codepoint.clear();
+
+        chars.next(); // skip the opening quote
+
+        for (i, ch) in chars {
+            if esc { // escaped
+                match ch {
+                    'b'  => {esc = false; s.push(8 as char)},
+                    't'  => {esc = false; s.push(9 as char)},
+                    'n'  => {esc = false; s.push(10 as char)},
+                    'f'  => {esc = false; s.push(12 as char)},
+                    'r'  => {esc = false; s.push(13 as char)},
+                    '"'  => {esc = false; s.push(34 as char)},
+                    '/'  => {esc = false; s.push(47 as char)},
+                    '\\' => {esc = false; s.push(92 as char)},
+                    'u'  => {self.codepoint.push_str("\\u{")},
+                    _ => return Err(InvalidToken(lex.off+i, lex.row, lex.col)),
+                }
+                continue
+
+            } else if self.codepoint.len() == 7 { // unicode gathered
+                self.codepoint.push('}');
+                s.push_str(&self.codepoint);
+                self.codepoint.clear();
+                // fall through
+
+            } else if self.codepoint.len() > 0 { // unicode escaped
+                match ch {
+                    '0'..='9'|'a'..='f'|'A'..='F' => self.codepoint.push(ch),
+                    _ => return Err(InvalidToken(lex.off+i, lex.row, lex.col))
+                };
+                continue
+
+            }
+            if ch == '"' { // exit
+                let (off, row, col) = (lex.off+i, lex.row, lex.col+i);
+                lex.update(off, row, col);
+                return Ok(Json::String(s))
+            }
+            match ch as i32 { // normal character
+                0x20 | 0x21 | 0x23..=0x5B | 0x5D..=0x10FFFF => s.push(ch),
+                _ => return Err(InvalidToken(lex.off+i, lex.row, lex.col)),
+            }
+        }
+        Err(InvalidToken(self.inner.len(), lex.row, lex.col))
+    }
+
     fn parse_whitespace(&self, lex: &mut Lex) {
         let text = &self.inner[lex.off..];
         for (i, ch) in text.chars().enumerate() {
@@ -177,7 +231,7 @@ impl JsonBuf {
 
 impl From<String> for JsonBuf {
     fn from(s: String) -> JsonBuf {
-        JsonBuf { inner: s }
+        JsonBuf { inner: s, codepoint: String::with_capacity(16) }
     }
 }
 
@@ -192,7 +246,7 @@ pub enum Json {
     Bool(bool),
     Integer(i128),
     Float(f64),
-    //String(String),
+    String(String),
     //Array(Vec<Json>),
     //Object(HashMap<String, Json>),
 }
@@ -258,7 +312,7 @@ pub enum Json {
 //            if u.len() == 7 {
 //                u.push('}');
 //                s.push_str(&u);
-//                u.truncate(0);
+//                u.clear();
 //            }
 //            continue
 //
