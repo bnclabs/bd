@@ -49,7 +49,7 @@ impl PointerBuf {
         self
     }
 
-    pub fn set<T>(&mut self, pointer: T) where T: AsRef<str> {
+    pub fn set<T>(&mut self, pointer: &T) where T: AsRef<str> + ?Sized {
         self.inner.truncate(0);
         self.inner.push_str(pointer.as_ref())
     }
