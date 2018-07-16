@@ -23,7 +23,7 @@ mod tests {
     }
 
     #[bench]
-    fn bench_string_copy_1K(b: &mut Bencher) {
+    fn bench_string_copy_1_k(b: &mut Bencher) {
         let mut s = String::with_capacity(1000);
         let mut d = String::with_capacity(1000);
         let r = "helloworld";
@@ -33,7 +33,7 @@ mod tests {
     }
 
     #[bench]
-    fn bench_string_copy_4K(b: &mut Bencher) {
+    fn bench_string_copy_4_k(b: &mut Bencher) {
         let mut s = String::with_capacity(4000);
         let mut d = String::with_capacity(4000);
         let r = "helloworld";
@@ -43,7 +43,7 @@ mod tests {
     }
 
     #[bench]
-    fn bench_string_copy_10K(b: &mut Bencher) {
+    fn bench_string_copy_10_k(b: &mut Bencher) {
         let mut s = String::with_capacity(10000);
         let mut d = String::with_capacity(10000);
         let r = "helloworld";
@@ -53,7 +53,7 @@ mod tests {
     }
 
     #[bench]
-    fn bench_string_copy_1M(b: &mut Bencher) {
+    fn bench_string_copy_1_m(b: &mut Bencher) {
         let mut s = String::with_capacity(1000000);
         let mut d = String::with_capacity(1000000);
         let r = "helloworld";
