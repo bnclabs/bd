@@ -7,6 +7,7 @@ pub type Result<T> = result::Result<T,Error>;
 #[derive(Debug)]
 pub enum Error {
     InvalidToken(usize, usize, usize),
+    InvalidString(usize, usize, usize),
     DuplicateKey(usize, usize, usize),
     KeyIsNotString(usize, usize, usize),
     MissingToken,
@@ -27,30 +28,20 @@ impl Lex {
 
 pub struct JsonBuf {
     inner: String,
-    codepoint: String,
 }
 
 impl JsonBuf {
     pub fn new() -> JsonBuf {
-        JsonBuf{ inner: String::new(), codepoint: String::with_capacity(16) }
+        JsonBuf{ inner: String::new() }
     }
 
     pub fn with_capacity(cap: usize) -> JsonBuf {
-        JsonBuf{
-            inner: String::with_capacity(cap),
-            codepoint: String::with_capacity(16)
-        }
+        JsonBuf{ inner: String::with_capacity(cap) }
     }
 
     pub fn parse_str(text: &str) -> Result<Json> {
-        use ::json::Error::{MissingToken};
-
         let mut lex = Lex::new(0_usize, 1_usize, 1_usize);
-        if text.len() == 0 {
-            return Err(MissingToken)
-        }
-        let mut codepoint = String::with_capacity(16);
-        parse_value(&text[lex.off..], &mut codepoint, &mut lex)
+        parse_value(&text[lex.off..], &mut lex)
     }
 
     pub fn set<T>(&mut self, text: &T) where T: AsRef<str> + ?Sized {
@@ -63,15 +54,8 @@ impl JsonBuf {
     }
 
     pub fn parse(&mut self) -> Result<Json> {
-        use ::json::Error::{MissingToken};
-
         let mut lex = Lex::new(0_usize, 1_usize, 1_usize);
-        if self.inner.len() == 0 {
-            return Err(MissingToken)
-        }
-        let val = parse_value(
-            &self.inner[lex.off..], &mut self.codepoint, &mut lex,
-        )?;
+        let val = parse_value(&self.inner[lex.off..], &mut lex)?;
         self.inner = self.inner[lex.off..].to_string(); // remaining text.
         Ok(val)
     }
@@ -80,7 +64,7 @@ impl JsonBuf {
 
 impl From<String> for JsonBuf {
     fn from(s: String) -> JsonBuf {
-        JsonBuf { inner: s, codepoint: String::with_capacity(16) }
+        JsonBuf { inner: s }
     }
 }
 
@@ -90,21 +74,29 @@ impl<'a, T> From<&'a T> for JsonBuf where T: AsRef<str> + ?Sized {
     }
 }
 
-fn parse_value(text: &str, codepoint: &mut String, lex: &mut Lex)
+//static PARSER = include!("./parser.lookup");
+
+fn parse_value(text: &str, lex: &mut Lex)
     -> Result<Json>
 {
-    use ::json::Error::{InvalidToken};
+    use ::json::Error::{InvalidToken, MissingToken};
 
     parse_whitespace(text, lex);
-    //println!("text -- {:?}", &text[lex.off..]);
-    let val = match &text[lex.off..].chars().nth(0).unwrap() {
-        'n' => parse_null(text, lex)?,
-        't' => parse_true(text, lex)?,
-        'f' => parse_false(text, lex)?,
-        '0'..='9'|'+'|'-'|'.'|'e'|'E' => parse_num(text, lex)?,
-        '"' => parse_string(text, codepoint, lex)?,
-        '[' => parse_array(text, codepoint, lex)?,
-        '{' => parse_object(text, codepoint, lex)?,
+
+    let valtext = &text[lex.off..];
+    if valtext.len() == 0 {
+        return Err(MissingToken)
+    }
+
+    //println!("text -- {:?}", valtext);
+    let val = match valtext.as_bytes()[0] {
+        b'n' => parse_null(text, lex)?,
+        b't' => parse_true(text, lex)?,
+        b'f' => parse_false(text, lex)?,
+        b'0'..=b'9'|b'+'|b'-'|b'.'|b'e'|b'E' => parse_num(text, lex)?,
+        b'"' => parse_string(text, lex)?,
+        b'[' => parse_array(text, lex)?,
+        b'{' => parse_object(text, lex)?,
         _ => return Err(InvalidToken(lex.off, lex.row, lex.col)),
     };
     //println!("valu -- {:?}", val);
@@ -174,61 +166,77 @@ fn parse_num(text: &str, lex: &mut Lex) -> Result<Json> {
     doparse(text, text.len())
 }
 
-fn parse_string(text: &str, codepoint: &mut String, lex: &mut Lex)
+static ESCAPES: [u8; 256] = include!("./esc.lookup");
+static HEXNUM: [u8; 256] = include!("./hexnum.lookup");
+
+fn parse_string(text: &str, lex: &mut Lex)
     -> Result<Json>
 {
-    use ::json::Error::InvalidToken;
+    use ::json::Error::InvalidString;
 
-    let text = &text[lex.off..];
+    let tlen = (&text[lex.off..]).len();
 
     let mut s = String::new();
-    let mut esc = false;
-    let mut chars = text.char_indices();
-    codepoint.clear();
-
+    let mut chars = (&text[lex.off..]).char_indices();
     chars.next(); // skip the opening quote
 
-    for (i, ch) in chars {
-        if esc { // escaped
-            match ch {
-                'b'  => {esc = false; s.push(8 as char)},
-                't'  => {esc = false; s.push(9 as char)},
-                'n'  => {esc = false; s.push(10 as char)},
-                'f'  => {esc = false; s.push(12 as char)},
-                'r'  => {esc = false; s.push(13 as char)},
-                '"'  => {esc = false; s.push(34 as char)},
-                '/'  => {esc = false; s.push(47 as char)},
-                '\\' => {esc = false; s.push(92 as char)},
-                'u'  => {codepoint.push_str("\\u{")},
-                _ => return Err(InvalidToken(lex.off+i, lex.row, lex.col)),
+    while let Some((i, ch)) = chars.next() {
+        // normal character  0x20 | 0x21 | 0x23..=0x5B | 0x5D..=0x10FFFF
+        if (ch as i32) >= 0x5D || ESCAPES[ch as usize] == 1 {
+            s.push(ch);
+            continue
+
+        } else if ch == '"' { // '"' exit
+            lex.incr_col(i+1);
+            return Ok(Json::String(s))
+
+        } else if ch == '\\' { // escape '\\'
+            if (tlen-i) < 3 {
+                return Err(InvalidString(lex.off+i, lex.row, lex.col))
             }
-            continue
 
-        } else if codepoint.len() == 7 { // unicode gathered
-            codepoint.push('}');
-            s.push_str(&codepoint);
-            codepoint.clear();
-            // fall through
+            let (i, escval) = chars.next().unwrap();
 
-        } else if codepoint.len() > 0 { // unicode escaped
-            match ch {
-                '0'..='9'|'a'..='f'|'A'..='F' => codepoint.push(ch),
-                _ => return Err(InvalidToken(lex.off+i, lex.row, lex.col))
-            };
-            continue
-        }
+            if escval == 'u' { // unicode escape
+                s.push_str("\\u{");
+                let mut n = 0;
+                while let Some((i, ch)) = chars.next() {
+                    if (ch as u8) > 128 || HEXNUM[ch as usize] == 0 {
+                        return Err(InvalidString(lex.off+i, lex.row, lex.col))
+                    }
+                    s.push(ch);
+                    n += 1;
+                    if n == 4 { break }
+                }
+                if n != 4 {
+                    return Err(InvalidString(lex.off+i, lex.row, lex.col))
+                }
+                s.push('}');
+                continue
 
-        match ch as i32 {
-            92 => { esc = true; continue; }
-            34 => { lex.incr_col(i+1); return Ok(Json::String(s)) } // exit
-            0x20 | 0x21 | 0x23..=0x5B | 0x5D..=0x10FFFF => s.push(ch),
-            _ => return Err(InvalidToken(lex.off+i, lex.row, lex.col)),
+            } else if (escval as i32) > 126 { // character as it is
+                s.push(escval);
+                continue;
+            }
+
+            let b = ESCAPES[escval as usize] as u8;
+            if b == 0 || b == 1 { // character as it is
+                s.push(escval);
+                continue
+
+            } else {
+                // 'b' (98 as 8)   't' (116 as 9)  'n' (110 as 10)
+                // 'f' (102 as 12) 'r' (114 as 13) '"' (34 as 34)
+                // '/' (47 as 47)  '\\' (92 as 92)
+                s.push(b as char);
+                continue
+            }
         }
     }
-    Err(InvalidToken(text.len(), lex.row, lex.col))
+    Err(InvalidString(text.len(), lex.row, lex.col))
 }
 
-fn parse_array(text: &str, codepoint: &mut String, lex: &mut Lex)
+fn parse_array(text: &str, lex: &mut Lex)
     -> Result<Json>
 {
     use ::json::Error::InvalidToken;
@@ -246,7 +254,7 @@ fn parse_array(text: &str, codepoint: &mut String, lex: &mut Lex)
             break Ok(Json::Array(array))
         }
 
-        array.push(parse_value(text, codepoint, lex)?);
+        array.push(parse_value(text, lex)?);
 
         parse_whitespace(text, lex);
         if (&text[lex.off..]).as_bytes()[0] == b',' { // skip comma
@@ -256,7 +264,7 @@ fn parse_array(text: &str, codepoint: &mut String, lex: &mut Lex)
     }
 }
 
-fn parse_object(text: &str, codepoint: &mut String, lex: &mut Lex)
+fn parse_object(text: &str, lex: &mut Lex)
     -> Result<Json>
 {
     use ::json::Error::{InvalidToken, DuplicateKey, KeyIsNotString};
@@ -267,7 +275,7 @@ fn parse_object(text: &str, codepoint: &mut String, lex: &mut Lex)
     loop {
         // key
         parse_whitespace(text, lex);
-        let key = parse_string(text, codepoint, lex)?;
+        let key = parse_string(text, lex)?;
         if let Json::String(_) = key {
             break Err(KeyIsNotString(lex.off, lex.row, lex.col))
         }
@@ -282,7 +290,7 @@ fn parse_object(text: &str, codepoint: &mut String, lex: &mut Lex)
         lex.incr_col(1); // skip ':'
         // value
         parse_whitespace(text, lex);
-        let value = parse_value(text, codepoint, lex)?;
+        let value = parse_value(text, lex)?;
         // is exit
         parse_whitespace(text, lex);
         if (&text[lex.off..]).len() == 0 {
@@ -297,14 +305,16 @@ fn parse_object(text: &str, codepoint: &mut String, lex: &mut Lex)
     }
 }
 
+static WS_LOOKUP: [u8; 256] = include!("./ws.lookup");
+
 fn parse_whitespace(text: &str, lex: &mut Lex) {
-    let text = &text[lex.off..];
-    for (_, ch) in text.char_indices() {
-        match ch {
-            ' ' | '\t' | '\r' => { lex.col += 1 },
-            '\n' => { lex.row += 1; lex.col = 0 },
-            _ => break,
-        }
+    for &ch in (&text[lex.off..]).as_bytes() {
+        match WS_LOOKUP[ch as usize] {
+            0 => break,
+            1 => { lex.col += 1 },              // ' ' | '\t' | '\r'
+            2 => { lex.row += 1; lex.col = 0 }, // '\n'
+            _ => panic!("unreachable code"),
+        };
         lex.off += 1;
     }
 }
@@ -352,7 +362,7 @@ impl FromStr for Json {
 
 #[cfg(test)]
 mod tests {
-    use ::json::{JsonBuf, Json};
+    use super::{JsonBuf, Json, Lex};
     use test::Bencher;
 
     #[test]
@@ -408,27 +418,31 @@ mod tests {
     }
 
     #[bench]
+    fn bench_ws(b: &mut Bencher) {
+        b.iter( || {
+            let mut lex = Lex::new(0_usize, 1_usize, 1_usize);
+            super::parse_null("null", &mut lex).unwrap()
+        });
+    }
+
+    #[bench]
     fn bench_null(b: &mut Bencher) {
-        let mut jsonbuf = JsonBuf::new();
-        b.iter(|| {jsonbuf.set("null"); jsonbuf.parse().unwrap()});
+        b.iter(|| {JsonBuf::parse_str("null").unwrap()});
     }
 
     #[bench]
     fn bench_bool(b: &mut Bencher) {
-        let mut jsonbuf = JsonBuf::new();
-        b.iter(|| {jsonbuf.set("false"); jsonbuf.parse().unwrap()});
+        b.iter(|| {JsonBuf::parse_str("false").unwrap()});
     }
 
     #[bench]
     fn bench_num(b: &mut Bencher) {
-        let mut jsonbuf = JsonBuf::new();
-        b.iter(|| {jsonbuf.set("10.2"); jsonbuf.parse().unwrap()});
+        b.iter(|| {JsonBuf::parse_str("10.2").unwrap()});
     }
 
     #[bench]
     fn bench_string(b: &mut Bencher) {
-        let mut jsonbuf = JsonBuf::new();
         let s = r#""汉语 / 漢語; Hàn\b \tyǔ ""#;
-        b.iter(|| {jsonbuf.set(s); jsonbuf.parse().unwrap()});
+        b.iter(|| {JsonBuf::parse_str(s).unwrap()});
     }
 }
