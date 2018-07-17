@@ -1,6 +1,8 @@
 use std::collections::HashMap;
 use std::result;
-use std::str::FromStr;
+use std::str::{FromStr,CharIndices};
+use std::fmt::Write;
+use std::char;
 
 pub type Result<T> = result::Result<T,Error>;
 
@@ -8,8 +10,11 @@ pub type Result<T> = result::Result<T,Error>;
 pub enum Error {
     InvalidToken(usize, usize, usize),
     InvalidString(usize, usize, usize),
+    InvalidEscape(usize, usize, usize),
+    InvalidCodepoint(usize, usize, usize),
     DuplicateKey(usize, usize, usize),
     KeyIsNotString(usize, usize, usize),
+    InvalidNumber(usize, usize, usize),
     MissingToken,
 }
 
@@ -73,8 +78,6 @@ impl<'a, T> From<&'a T> for JsonBuf where T: AsRef<str> + ?Sized {
         JsonBuf::from(s.as_ref().to_string())
     }
 }
-
-//static PARSER = include!("./parser.lookup");
 
 fn parse_value(text: &str, lex: &mut Lex)
     -> Result<Json>
@@ -141,100 +144,137 @@ fn parse_false(text: &str, lex: &mut Lex) -> Result<Json> {
 }
 
 fn parse_num(text: &str, lex: &mut Lex) -> Result<Json> {
-    use ::json::Error::InvalidToken;
+    use ::json::Error::InvalidNumber;
 
     let text = &text[lex.off..];
-
-    let mut doparse = |text: &str, i: usize| -> Result<Json> {
-        if let Ok(num) = text.parse::<i128>() {
-            lex.incr_col(i);
-            return Ok(Json::Integer(num))
-        } else if let Ok(num) = text.parse::<f64>() {
-            lex.incr_col(i);
-            return Ok(Json::Float(num))
+    let mut doparse = |text: &str, i: usize, is_float: bool| -> Result<Json> {
+        if is_float {
+            if let Ok(num) = text.parse::<f64>() {
+                lex.incr_col(i);
+                return Ok(Json::Float(num))
+            }
+            Err(InvalidNumber(lex.off+i, lex.row, lex.col+i))
+        } else {
+            if let Ok(num) = text.parse::<i128>() {
+                lex.incr_col(i);
+                return Ok(Json::Integer(num))
+            }
+            Err(InvalidNumber(lex.off+i, lex.row, lex.col+i))
         }
-        return Err(InvalidToken(lex.off, lex.row, lex.col))
     };
 
+    let mut is_float = false;
     for (i, ch) in text.char_indices() {
         match ch {
-            '0'..='9'|'+'|'-'|'.'|'e'|'E' => continue, // valid number
+            '0'..='9'|'+'|'-'|'e'|'E' => continue, // valid number
+            '.' => { is_float = true; continue}, // float number
             _ => (),
         }
-        return doparse(&text[..i], i)
+        return doparse(&text[..i], i, is_float)
     }
-    doparse(text, text.len())
+    doparse(text, text.len(), is_float)
 }
 
-static ESCAPES: [u8; 256] = include!("./esc.lookup");
-static HEXNUM: [u8; 256] = include!("./hexnum.lookup");
+static HEXNUM: [u8; 256] = include!("./lookup.hexnum");
 
-fn parse_string(text: &str, lex: &mut Lex)
-    -> Result<Json>
+fn parse_string(text: &str, lex: &mut Lex) -> Result<Json> {
+    use ::json::Error::{InvalidString, InvalidEscape, InvalidCodepoint};
+
+    let mut escape = false;
+    let mut res = String::new();
+    let mut chars = (&text[lex.off..]).char_indices();
+
+    let (i, _) = chars.next().unwrap(); // skip the opening quote
+
+    while let Some((i, ch)) = chars.next() {
+        if escape == false {
+            if ch == '\\' {
+                escape = true;
+                continue
+            }
+            match ch {
+                '"' => { lex.incr_col(i+1); return Ok(Json::String(res)); },
+                _ => res.push(ch),
+            }
+            continue
+        }
+
+        // previous char was escape
+        match ch {
+            '"' => res.push('"'),
+            '\\' => res.push('\\'),
+            '/' => res.push('/'),
+            'b' => res.push('\x08'),
+            'f' => res.push('\x0c'),
+            'n' => res.push('\n'),
+            'r' => res.push('\r'),
+            't' => res.push('\t'),
+            'u' => match decode_json_hex_code(&mut chars, lex)? {
+                0xDC00 ... 0xDFFF => {
+                    return Err(InvalidString(lex.off+i, lex.row, lex.col+i))
+                }
+                // Non-BMP characters are encoded as a sequence of
+                // two hex escapes, representing UTF-16 surrogates.
+                code1 @ 0xD800 ... 0xDBFF => {
+                    let code2 = decode_json_hex_code2(&mut chars, lex)?;
+                    if code2 < 0xDC00 || code2 > 0xDFFF {
+                        return Err(InvalidString(lex.off+i, lex.row, lex.col+i))
+                    }
+                    let code = (((code1 - 0xD800) as u32) << 10 |
+                                 (code2 - 0xDC00) as u32) + 0x1_0000;
+                    res.push(char::from_u32(code).unwrap());
+                }
+
+                n => match char::from_u32(n as u32) {
+                    Some(ch) => res.push(ch),
+                    None => return Err(
+                        InvalidCodepoint(lex.off+i, lex.row, lex.col+i)
+                    ),
+                },
+            },
+            _ => return Err(InvalidEscape(lex.off+1, lex.row, lex.col+i)),
+        }
+        escape = false;
+    }
+    return Err(InvalidString(lex.off+i, lex.row, lex.col+i))
+}
+
+fn decode_json_hex_code(chars: &mut CharIndices, lex: &mut Lex)
+    -> Result<u32>
 {
     use ::json::Error::InvalidString;
 
-    let tlen = (&text[lex.off..]).len();
+    let mut n = 0;
+    let mut code = 0_u32;
+    while let Some((_, ch)) = chars.next() {
+        if (ch as u8) > 128 || HEXNUM[ch as usize] == 20 {
+            return Err(InvalidString(lex.off, lex.row, lex.col))
+        }
+        code = code * 16 + (HEXNUM[ch as usize] as u32);
+        n += 1;
+        if n == 4 { break }
+    }
+    if n != 4 {
+        return Err(InvalidString(lex.off, lex.row, lex.col))
+    }
+    Ok(code)
+}
 
-    let mut s = String::new();
-    let mut chars = (&text[lex.off..]).char_indices();
-    chars.next(); // skip the opening quote
+fn decode_json_hex_code2(chars: &mut CharIndices, lex: &mut Lex)
+    -> Result<u32>
+{
+    use ::json::Error::InvalidString;
 
-    while let Some((i, ch)) = chars.next() {
-        // normal character  0x20 | 0x21 | 0x23..=0x5B | 0x5D..=0x10FFFF
-        if (ch as i32) >= 0x5D || ESCAPES[ch as usize] == 1 {
-            s.push(ch);
-            continue
-
-        } else if ch == '"' { // '"' exit
-            lex.incr_col(i+1);
-            return Ok(Json::String(s))
-
-        } else if ch == '\\' { // escape '\\'
-            if (tlen-i) < 3 {
-                return Err(InvalidString(lex.off+i, lex.row, lex.col))
-            }
-
-            let (i, escval) = chars.next().unwrap();
-
-            if escval == 'u' { // unicode escape
-                s.push_str("\\u{");
-                let mut n = 0;
-                while let Some((i, ch)) = chars.next() {
-                    if (ch as u8) > 128 || HEXNUM[ch as usize] == 0 {
-                        return Err(InvalidString(lex.off+i, lex.row, lex.col))
-                    }
-                    s.push(ch);
-                    n += 1;
-                    if n == 4 { break }
-                }
-                if n != 4 {
-                    return Err(InvalidString(lex.off+i, lex.row, lex.col))
-                }
-                s.push('}');
-                continue
-
-            } else if (escval as i32) > 126 { // character as it is
-                s.push(escval);
-                continue;
-            }
-
-            let b = ESCAPES[escval as usize] as u8;
-            if b == 0 || b == 1 { // character as it is
-                s.push(escval);
-                continue
-
-            } else {
-                // 'b' (98 as 8)   't' (116 as 9)  'n' (110 as 10)
-                // 'f' (102 as 12) 'r' (114 as 13) '"' (34 as 34)
-                // '/' (47 as 47)  '\\' (92 as 92)
-                s.push(b as char);
-                continue
+    if let Some((_, ch1)) = chars.next() {
+        if let Some((_, ch2)) = chars.next() {
+            if ch1 == '\\' && ch2 == 'u' {
+                return decode_json_hex_code(chars, lex)
             }
         }
     }
-    Err(InvalidString(text.len(), lex.row, lex.col))
+    return Err(InvalidString(lex.off, lex.row, lex.col))
 }
+
 
 fn parse_array(text: &str, lex: &mut Lex)
     -> Result<Json>
@@ -305,7 +345,7 @@ fn parse_object(text: &str, lex: &mut Lex)
     }
 }
 
-static WS_LOOKUP: [u8; 256] = include!("./ws.lookup");
+static WS_LOOKUP: [u8; 256] = include!("./lookup.ws");
 
 fn parse_whitespace(text: &str, lex: &mut Lex) {
     for &ch in (&text[lex.off..]).as_bytes() {
@@ -352,6 +392,44 @@ impl Json {
     }
 }
 
+fn encode_null(text: &mut String) {
+    text.push_str("null");
+}
+
+fn encode_bool(val: bool, text: &mut String) {
+    if val { text.push_str("true") } else { text.push_str("false") };
+}
+
+fn encode_integer(val: i128, text: &mut String) {
+    write!(text, "{}", val).unwrap();
+}
+
+fn encode_float(val: f64, text: &mut String) {
+    write!(text, "{:e}", val).unwrap();
+}
+
+static ESCAPE: [&'static str; 256] = include!("./lookup.escape");
+fn encode_string(val: &str, text: &mut String) {
+    text.push('"');
+
+    let mut start = 0;
+    for (i, byte) in val.bytes().enumerate() {
+        let escstr = ESCAPE[byte as usize];
+        if escstr.len() == 0 { continue }
+
+        if start < i {
+            text.push_str(&val[start..i]);
+        }
+        text.push_str(escstr);
+        start = i + 1;
+    }
+    if start != val.len() {
+        text.push_str(&val[start..]);
+    }
+
+    text.push('"');
+}
+
 impl FromStr for Json {
     type Err=Error;
 
@@ -393,9 +471,9 @@ mod tests {
     #[test]
     fn test_string() {
         let mut jsonbuf = JsonBuf::new();
-        let s = r#""汉语 / 漢語; Hàn\b \tyǔ ""#;
+        let inpstr = r#""汉语 / 漢語; Hàn\b \tyǔ ""#;
         let refstr = "汉语 / 漢語; Hàn\u{8} \tyǔ ";
-        jsonbuf.set(s);
+        jsonbuf.set(inpstr);
         assert_eq!(Json::String(refstr.to_string()), jsonbuf.parse().unwrap());
     }
 
@@ -443,6 +521,12 @@ mod tests {
     #[bench]
     fn bench_string(b: &mut Bencher) {
         let s = r#""汉语 / 漢語; Hàn\b \tyǔ ""#;
+        b.iter(|| {JsonBuf::parse_str(s).unwrap()});
+    }
+
+    #[bench]
+    fn bench_array(b: &mut Bencher) {
+	    let s = r#" [null,true,false,10,"tru\"e"]"#;
         b.iter(|| {JsonBuf::parse_str(s).unwrap()});
     }
 }
