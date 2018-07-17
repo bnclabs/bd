@@ -371,41 +371,29 @@ pub enum Json {
 }
 
 impl Json {
-    pub fn bool(self) -> bool {
-        use self::Json::{Bool};
-        match self { Bool(val) => val, _ => panic!("Json is not boolean") }
+    pub fn to_json(&self, text: &mut String) {
+        use self::Json::{Null, Bool, Integer, Float, Array, Object};
+        match self {
+            Null => text.push_str("null"),
+            Bool(true) => text.push_str("true"),
+            Bool(false) => text.push_str("false"),
+            Integer(val) => write!(text, "{}", val).unwrap(),
+            Float(val) => write!(text, "{:e}", val).unwrap(),
+            Json::String(val) => encode_string(&val, text),
+            Array(val) => {
+                text.push('[');
+                val.iter().for_each(|item| item.to_json(text));
+                text.push(']');
+            },
+            Object(val) => {
+                text.push('{');
+                val.iter().for_each(|(k, v)| {
+                    encode_string(&k, text); text.push(':'); v.to_json(text)
+                });
+                text.push('}');
+            }
+        }
     }
-
-    pub fn integer(self) -> i128 {
-        use self::Json::{Integer};
-        match self { Integer(val) => val, _ => panic!("Json is not integer") }
-    }
-
-    pub fn float(self) -> f64 {
-        use self::Json::{Float};
-        match self { Float(val) => val, _ => panic!("Json is not float") }
-    }
-
-    pub fn string(self) -> String {
-        use self::Json::{String};
-        match self { String(val) => val, _ => panic!("Json is not string") }
-    }
-}
-
-fn encode_null(text: &mut String) {
-    text.push_str("null");
-}
-
-fn encode_bool(val: bool, text: &mut String) {
-    if val { text.push_str("true") } else { text.push_str("false") };
-}
-
-fn encode_integer(val: i128, text: &mut String) {
-    write!(text, "{}", val).unwrap();
-}
-
-fn encode_float(val: f64, text: &mut String) {
-    write!(text, "{:e}", val).unwrap();
 }
 
 static ESCAPE: [&'static str; 256] = include!("./lookup.escape");
