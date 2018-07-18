@@ -359,6 +359,11 @@ fn parse_object(text: &str, lex: &mut Lex)
     lex.incr_col(1); // skip '{'
 
     let mut map = HashMap::new();
+    parse_whitespace(text, lex);
+    if (&text[lex.off..]).as_bytes()[0] == b'}' {
+        lex.incr_col(1);
+        return Ok(Json::Object(map))
+    }
     loop {
         // key
         parse_whitespace(text, lex);
@@ -374,6 +379,11 @@ fn parse_object(text: &str, lex: &mut Lex)
         // value
         parse_whitespace(text, lex);
         let value = parse_value(text, lex)?;
+
+        if let Some(_) = map.insert(key, value) {
+            break Err(DuplicateKey(lex.format()))
+        }
+
         // is exit
         parse_whitespace(text, lex);
         if (&text[lex.off..]).len() == 0 {
@@ -381,9 +391,8 @@ fn parse_object(text: &str, lex: &mut Lex)
         } else if (&text[lex.off..]).as_bytes()[0] == b'}' { // exit
             lex.incr_col(1);
             break Ok(Json::Object(map))
-        }
-        if let Some(_) = map.insert(key, value) {
-            break Err(DuplicateKey(lex.format()))
+        } else if (&text[lex.off..]).as_bytes()[0] == b',' { // skip comma
+            lex.incr_col(1);
         }
     }
 }
@@ -424,16 +433,33 @@ impl Json {
             Float(val) => write!(text, "{:e}", val).unwrap(),
             Json::String(val) => encode_string(&val, text),
             Array(val) => {
-                text.push('[');
-                val.iter().for_each(|item| item.to_json(text));
-                text.push(']');
+                if val.len() == 0 {
+                    text.push_str("[]");
+
+                } else {
+                    text.push('[');
+                    val[..val.len()-1]
+                        .iter()
+                        .for_each(|item| {item.to_json(text); text.push(',')});
+                    val[val.len()-1].to_json(text);
+                    text.push(']');
+                }
             },
             Object(val) => {
-                text.push('{');
-                val.iter().for_each(|(k, v)| {
-                    encode_string(&k, text); text.push(':'); v.to_json(text)
-                });
-                text.push('}');
+                let val_len = val.len();
+                if val_len == 0 {
+                    text.push_str("{}");
+
+                } else {
+                    text.push('{');
+                    for (i, (k, v)) in val.iter().enumerate() {
+                        encode_string(&k, text);
+                        text.push(':');
+                        v.to_json(text);
+                        if i < (val_len - 1) { text.push(','); }
+                    }
+                    text.push('}');
+                }
             }
         }
     }
@@ -513,38 +539,46 @@ impl TryFrom<Json> for HashMap<String,Json> {
 
 #[cfg(test)]
 mod tests {
-    use super::{JsonBuf, Json, Lex};
+    use super::*;
     use test::Bencher;
 
     #[test]
     fn test_simple_json() {
+        use self::Json::{Null, Bool, String, Integer, Float, Array, Object};
+        use std::string;
+
         let jsons = include!("./testcases.json");
-        let refs = include!("./testcases.json.ref");
+        let mut refs = include!("./testcases.json.ref");
+        let refs_len = refs.len();
         let mut jsonbuf = JsonBuf::new();
+
+        let obj = HashMap::new();
+        refs[refs_len - 3] = Object(obj);
+
+        let mut obj = HashMap::new();
+        obj.insert("key1".to_string(), String("value1".to_string()));
+        refs[refs_len - 2] = Object(obj);
+
+        let mut obj = HashMap::new();
+        obj.insert("key1".to_string(), String("value1".to_string()));
+        obj.insert("key2".to_string(), String("value2".to_string()));
+        refs[refs_len - 1] = Object(obj);
+
         for (i, json) in jsons.iter().enumerate() {
             jsonbuf.set(json);
             let value = jsonbuf.parse().unwrap();
+            //println!("{} {:?}", i, value);
             assert_eq!(value, refs[i]);
-            //println!("{:?}", value);
         }
-    }
 
-    #[test]
-    fn test_array() {
-        let mut jsonbuf = JsonBuf::new();
-        let mut s = r#"[10.2, null,false,"", true,"#.to_string();
-        s += r#"" ", 18014398509481984"#;
-        s += r#""hello world", "汉语 / 漢語; Hàn\b \tyǔ "]"#;
-        jsonbuf.set(&s);
-        let out = jsonbuf.parse().unwrap();
-        let refval = Json::Array(vec![
-            Json::Float(10.2), Json::Null, Json::Bool(false),
-            Json::String("".to_string()), Json::Bool(true),
-            Json::String(" ".to_string()), Json::Integer(18014398509481984),
-            Json::String("hello world".to_string()),
-            Json::String("汉语 / 漢語; Hàn\u{8} \tyǔ ".to_string()),
-        ]);
-        assert_eq!(refval, out);
+        let ref_jsons = include!("./testcases.json.ref.json");
+        let mut s = string::String::new();
+        for (i, r) in refs.iter().enumerate() {
+            s.clear();
+            r.to_json(&mut s);
+            //println!("{} {}", i, &s);
+            assert_eq!(&s, ref_jsons[i]);
+        }
     }
 
     #[bench]
