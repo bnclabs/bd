@@ -3,11 +3,11 @@ Rust-Data
 
 `rdata` is a big-data package with following primary scope.
 
-a. Interpret data in JSON format.
-c. Query JSON documents using [jq][jq].
-d. Organize JSON documents into buckets of data.
-b. Data collation algorithm for JSON.
-e. Index them for big-data operations.
+1. Interpret data in JSON format.
+2. Query JSON documents using [jq][jq].
+3. Organize JSON documents into buckets of data.
+4. Data collation algorithm for JSON.
+5. Index them for big-data operations.
 
 **Secondary scope**
 
