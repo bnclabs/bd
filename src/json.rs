@@ -552,17 +552,21 @@ mod tests {
         let refs_len = refs.len();
         let mut jsonbuf = JsonBuf::new();
 
+        let mut n = 3;
         let obj = HashMap::new();
-        refs[refs_len - 3] = Object(obj);
+        refs[refs_len - n] = Object(obj);
+        n -= 1;
 
         let mut obj = HashMap::new();
         obj.insert("key1".to_string(), String("value1".to_string()));
-        refs[refs_len - 2] = Object(obj);
+        refs[refs_len - n] = Object(obj);
+        n -= 1;
 
         let mut obj = HashMap::new();
         obj.insert("key1".to_string(), String("value1".to_string()));
         obj.insert("key2".to_string(), String("value2".to_string()));
-        refs[refs_len - 1] = Object(obj);
+        refs[refs_len - n] = Object(obj);
+        n -= 1;
 
         for (i, json) in jsons.iter().enumerate() {
             jsonbuf.set(json);
@@ -613,6 +617,12 @@ mod tests {
     #[bench]
     fn bench_array(b: &mut Bencher) {
 	    let s = r#" [null,true,false,10,"tru\"e"]"#;
+        b.iter(|| {JsonBuf::parse_str(s).unwrap()});
+    }
+
+    #[bench]
+    fn bench_map(b: &mut Bencher) {
+	    let s = r#"{"a": null, "b" : true,"c":false, "d\"":-10E-1, "e":"tru\"e" }"#;
         b.iter(|| {JsonBuf::parse_str(s).unwrap()});
     }
 }
