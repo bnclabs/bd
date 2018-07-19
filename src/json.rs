@@ -409,7 +409,7 @@ fn parse_whitespace(text: &str, lex: &mut Lex) {
     }
 }
 
-#[derive(Debug,PartialEq)]
+#[derive(Clone,Debug,PartialEq)]
 pub enum Json {
     Null,
     Bool(bool),
