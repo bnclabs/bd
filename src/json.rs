@@ -572,7 +572,7 @@ mod tests {
             jsonbuf.set(json);
             let value = jsonbuf.parse().unwrap();
             //println!("{} {:?}", i, value);
-            assert_eq!(value, refs[i]);
+            assert_eq!(value, refs[i], "testcase: {}", i);
         }
 
         let ref_jsons = include!("./testcases.json.ref.json");
@@ -581,7 +581,7 @@ mod tests {
             s.clear();
             r.to_json(&mut s);
             //println!("{} {}", i, &s);
-            assert_eq!(&s, ref_jsons[i]);
+            assert_eq!(&s, ref_jsons[i], "testcase: {}", i);
         }
     }
 
