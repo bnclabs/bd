@@ -4,6 +4,8 @@ use std::fmt::{self, Write};
 use std::convert::{TryFrom,TryInto};
 use std::{result, char, error};
 
+include!("./json.rs.lookup");
+
 pub type Result<T> = result::Result<T,JsonError>;
 
 #[derive(Debug)]
@@ -216,8 +218,6 @@ fn parse_num(text: &str, lex: &mut Lex) -> Result<Json> {
     doparse(text, text.len(), is_float)
 }
 
-static HEXNUM: [u8; 256] = include!("./lookup.hexnum");
-
 fn parse_string(text: &str, lex: &mut Lex) -> Result<Json> {
     use ::json::JsonError::{InvalidString, InvalidEscape, InvalidCodepoint};
 
@@ -397,8 +397,6 @@ fn parse_object(text: &str, lex: &mut Lex)
     }
 }
 
-static WS_LOOKUP: [u8; 256] = include!("./lookup.ws");
-
 fn parse_whitespace(text: &str, lex: &mut Lex) {
     for &ch in (&text[lex.off..]).as_bytes() {
         match WS_LOOKUP[ch as usize] {
@@ -465,7 +463,6 @@ impl Json {
     }
 }
 
-static ESCAPE: [&'static str; 256] = include!("./lookup.escape");
 fn encode_string(val: &str, text: &mut String) {
     text.push('"');
 
@@ -543,12 +540,12 @@ mod tests {
     use test::Bencher;
 
     #[test]
-    fn test_simple_json() {
+    fn test_simple_jsons() {
         use self::Json::{Null, Bool, String, Integer, Float, Array, Object};
         use std::string;
 
-        let jsons = include!("./testcases.json");
-        let mut refs = include!("./testcases.json.ref");
+        let jsons = include!("../testdata/test_simple.jsons");
+        let mut refs = include!("../testdata/test_simple.jsons.ref");
         let refs_len = refs.len();
         let mut jsonbuf = JsonBuf::new();
 
@@ -575,7 +572,7 @@ mod tests {
             assert_eq!(value, refs[i], "testcase: {}", i);
         }
 
-        let ref_jsons = include!("./testcases.json.ref.json");
+        let ref_jsons = include!("../testdata/test_simple.jsons.ref.jsons");
         let mut s = string::String::new();
         for (i, r) in refs.iter().enumerate() {
             s.clear();
