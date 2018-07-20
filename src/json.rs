@@ -583,14 +583,6 @@ mod tests {
     }
 
     #[bench]
-    fn bench_ws(b: &mut Bencher) {
-        b.iter( || {
-            let mut lex = Lex::new(0_usize, 1_usize, 1_usize);
-            super::parse_null("null", &mut lex).unwrap()
-        });
-    }
-
-    #[bench]
     fn bench_null(b: &mut Bencher) {
         b.iter(|| {JsonBuf::parse_str("null").unwrap()});
     }
@@ -621,5 +613,50 @@ mod tests {
     fn bench_map(b: &mut Bencher) {
 	    let s = r#"{"a": null, "b" : true,"c":false, "d\"":-10E-1, "e":"tru\"e" }"#;
         b.iter(|| {JsonBuf::parse_str(s).unwrap()});
+    }
+
+    #[bench]
+    fn bench_null_to_json(b: &mut Bencher) {
+        let val = JsonBuf::parse_str("null").unwrap();
+        let mut outs = String::with_capacity(64);
+        b.iter(|| {outs.clear(); val.to_json(&mut outs)});
+    }
+
+    #[bench]
+    fn bench_bool_to_json(b: &mut Bencher) {
+        let val = JsonBuf::parse_str("false").unwrap();
+        let mut outs = String::with_capacity(64);
+        b.iter(|| {outs.clear(); val.to_json(&mut outs)});
+    }
+
+    #[bench]
+    fn bench_num_to_json(b: &mut Bencher) {
+        let val = JsonBuf::parse_str("10.2").unwrap();
+        let mut outs = String::with_capacity(64);
+        b.iter(|| {outs.clear(); val.to_json(&mut outs)});
+    }
+
+    #[bench]
+    fn bench_string_to_json(b: &mut Bencher) {
+        let inp = r#""汉语 / 漢語; Hàn\b \tyǔ ""#;
+        let val = JsonBuf::parse_str(inp).unwrap();
+        let mut outs = String::with_capacity(64);
+        b.iter(|| {outs.clear(); val.to_json(&mut outs)});
+    }
+
+    #[bench]
+    fn bench_array_to_json(b: &mut Bencher) {
+	    let inp = r#" [null,true,false,10,"tru\"e"]"#;
+        let val = JsonBuf::parse_str(inp).unwrap();
+        let mut outs = String::with_capacity(64);
+        b.iter(|| {outs.clear(); val.to_json(&mut outs)});
+    }
+
+    #[bench]
+    fn bench_map_to_json(b: &mut Bencher) {
+	    let inp = r#"{"a": null, "b" : true,"c":false, "d\"":-10E-1, "e":"tru\"e" }"#;
+        let val = JsonBuf::parse_str(inp).unwrap();
+        let mut outs = String::with_capacity(64);
+        b.iter(|| {outs.clear(); val.to_json(&mut outs)});
     }
 }
