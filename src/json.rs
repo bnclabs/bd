@@ -78,6 +78,11 @@ impl Lex {
         self.col += i;
     }
 
+    #[inline]
+    fn set(&mut self, off: usize, row: usize, col: usize) {
+        self.off = off; self.row = row; self.col = col;
+    }
+
     fn format(&self) -> String {
         format!("offset:{} line:{} col:{}", self.off, self.row, self.col)
     }
@@ -85,24 +90,26 @@ impl Lex {
 
 pub struct JsonBuf {
     inner: String,
+    lex: Lex,
 }
 
 impl JsonBuf {
     pub fn new() -> JsonBuf {
-        JsonBuf{ inner: String::new() }
+        JsonBuf{ inner: String::new(), lex: Lex::new(0, 1, 1) }
     }
 
     pub fn with_capacity(cap: usize) -> JsonBuf {
-        JsonBuf{ inner: String::with_capacity(cap) }
+        JsonBuf{ inner: String::with_capacity(cap), lex: Lex::new(0, 1, 1) }
     }
 
     pub fn parse_str(text: &str) -> Result<Json> {
-        let mut lex = Lex::new(0_usize, 1_usize, 1_usize);
+        let mut lex = Lex::new(0, 1, 1);
         parse_value(&text[lex.off..], &mut lex)
     }
 
     pub fn set<T>(&mut self, text: &T) where T: AsRef<str> + ?Sized {
         self.inner.clear();
+        self.lex.set(0, 1, 1);
         self.inner.push_str(text.as_ref());
     }
 
@@ -111,9 +118,9 @@ impl JsonBuf {
     }
 
     pub fn parse(&mut self) -> Result<Json> {
-        let mut lex = Lex::new(0_usize, 1_usize, 1_usize);
-        let val = parse_value(&self.inner[lex.off..], &mut lex)?;
-        self.inner = self.inner[lex.off..].to_string(); // remaining text.
+        self.lex.set(0, 1, 1);
+        let val = parse_value(&self.inner[self.lex.off..], &mut self.lex)?;
+        self.inner = self.inner[self.lex.off..].to_string(); // remaining text.
         Ok(val)
     }
 
@@ -121,7 +128,7 @@ impl JsonBuf {
 
 impl From<String> for JsonBuf {
     fn from(s: String) -> JsonBuf {
-        JsonBuf { inner: s }
+        JsonBuf{ inner: s, lex: Lex::new(0, 1, 1) }
     }
 }
 
