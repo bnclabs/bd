@@ -1,8 +1,8 @@
 use std::str::{FromStr,CharIndices};
-use std::collections::HashMap;
 use std::fmt::{self, Write};
 use std::convert::{TryFrom,TryInto};
 use std::{result, char, error};
+use std::cmp::Ordering;
 
 include!("./json.rs.lookup");
 
@@ -358,7 +358,7 @@ fn parse_object(text: &str, lex: &mut Lex)
 
     lex.incr_col(1); // skip '{'
 
-    let mut map = HashMap::new();
+    let mut map = Vec::new();
     parse_whitespace(text, lex);
     if (&text[lex.off..]).as_bytes()[0] == b'}' {
         lex.incr_col(1);
@@ -380,8 +380,9 @@ fn parse_object(text: &str, lex: &mut Lex)
         parse_whitespace(text, lex);
         let value = parse_value(text, lex)?;
 
-        if let Some(_) = map.insert(key, value) {
-            break Err(DuplicateKey(lex.format()))
+        match insert_index(&map, &key) {
+            Some(index) => map.insert(index, KeyValue(key, value)),
+            None => break Err(DuplicateKey(lex.format()))
         }
 
         // is exit
@@ -409,6 +410,54 @@ fn parse_whitespace(text: &str, lex: &mut Lex) {
     }
 }
 
+fn get_by_key<'a>(map_list: &'a [KeyValue], key: &str) -> Option<&'a KeyValue> {
+    match map_list.len() {
+        0 => None,
+        n => match key.cmp(&map_list[n/2].0) {
+            Ordering::Equal => Some(&map_list[n/2]),
+            Ordering::Less => get_by_key(&map_list[..n/2], key),
+            Ordering::Greater => get_by_key(&map_list[n/2+1..], key),
+        },
+    }
+}
+
+fn insert_index(map_list: &[KeyValue], key: &str) -> Option<usize> {
+    match map_list.len() {
+        0 => Some(0),
+        n => match key.cmp(&map_list[n/2].0) {
+            Ordering::Equal => None,
+            Ordering::Less => insert_index(&map_list[..n/2], key),
+            Ordering::Greater => {
+                let index = insert_index(&map_list[n/2+1..], key)?;
+                Some(index+n/2+1)
+            },
+        },
+    }
+}
+
+#[derive(Debug,Clone)]
+pub struct KeyValue(String,Json);
+
+impl Eq for KeyValue {}
+
+impl PartialEq for KeyValue {
+    fn eq(&self, other: &KeyValue) -> bool {
+        self.0.eq(&other.0) // compare only the key.
+    }
+}
+
+impl PartialOrd for KeyValue {
+    fn partial_cmp(&self, other: &KeyValue) -> Option<Ordering> {
+        Some(self.0.cmp(&other.0)) // compare only the key.
+    }
+}
+
+impl Ord for KeyValue {
+    fn cmp(&self, other: &KeyValue) -> Ordering {
+        self.0.cmp(&other.0) // compare only the key.
+    }
+}
+
 #[derive(Clone,Debug,PartialEq)]
 pub enum Json {
     Null,
@@ -417,7 +466,7 @@ pub enum Json {
     Float(f64),
     String(String),
     Array(Vec<Json>),
-    Object(HashMap<String, Json>),
+    Object(Vec<KeyValue>),
 }
 
 impl Json {
@@ -450,10 +499,10 @@ impl Json {
 
                 } else {
                     text.push('{');
-                    for (i, (k, v)) in val.iter().enumerate() {
-                        encode_string(&k, text);
+                    for (i, kv) in val.iter().enumerate() {
+                        encode_string(&kv.0, text);
                         text.push(':');
-                        v.to_json(text);
+                        kv.1.to_json(text);
                         if i < (val_len - 1) { text.push(','); }
                     }
                     text.push('}');
@@ -527,9 +576,9 @@ impl TryFrom<Json> for Vec<Json> {
     }
 }
 
-impl TryFrom<Json> for HashMap<String,Json> {
+impl TryFrom<Json> for Vec<KeyValue> {
     type Error=JsonError;
-    fn try_from(val: Json) -> result::Result<HashMap<String,Json>, JsonError> {
+    fn try_from(val: Json) -> result::Result<Vec<KeyValue>, JsonError> {
         match val { Json::Object(s) => Ok(s), _ => Err(JsonError::NotObject) }
     }
 }
@@ -550,18 +599,24 @@ mod tests {
         let mut jsonbuf = JsonBuf::new();
 
         let mut n = 3;
-        let obj = HashMap::new();
+        let obj = Vec::new();
         refs[refs_len - n] = Object(obj);
         n -= 1;
 
-        let mut obj = HashMap::new();
-        obj.insert("key1".to_string(), String("value1".to_string()));
+        let mut obj = Vec::new();
+        let kv = KeyValue("key1".to_string(), r#""value1""#.parse().unwrap());
+        let index = insert_index(&obj, &kv.0).unwrap();
+        obj.insert(index, kv);
         refs[refs_len - n] = Object(obj);
         n -= 1;
 
-        let mut obj = HashMap::new();
-        obj.insert("key1".to_string(), String("value1".to_string()));
-        obj.insert("key2".to_string(), String("value2".to_string()));
+        let mut obj = Vec::new();
+        let kv = KeyValue("key1".to_string(), r#""value1""#.parse().unwrap());
+        let index = insert_index(&obj, &kv.0).unwrap();
+        obj.insert(index, kv);
+        let kv = KeyValue("key2".to_string(), r#""value2""#.parse().unwrap());
+        let index = insert_index(&obj, &kv.0).unwrap();
+        obj.insert(index, kv);
         refs[refs_len - n] = Object(obj);
         n -= 1;
 
