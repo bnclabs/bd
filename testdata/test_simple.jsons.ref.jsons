@@ -38,6 +38,7 @@
 r#""hello\" \\ / \b \f\n\r\t""#,
 r#""helloȴ\\ 𝄞""#,
 r#""汉语 / 漢語; Hàn\b \tyǔ ""#,
+r#""'é' character is one Unicode code point é while 'é' é ""#,
 "[]",
 "[10]",
 r#"[null,true,false,10,"tru\"e"]"#,
