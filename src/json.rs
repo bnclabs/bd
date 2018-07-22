@@ -1,8 +1,11 @@
-use std::str::{FromStr,CharIndices};
-use std::fmt::{self, Write};
-use std::convert::{TryFrom,TryInto};
-use std::{result, char, error};
-use std::cmp::Ordering;
+use std::{
+    {result, char, error},
+    str::{self, FromStr,CharIndices},
+    fmt::{self, Write},
+    convert::{TryFrom,TryInto},
+    cmp::Ordering,
+    io,
+};
 
 include!("./json.rs.lookup");
 
@@ -28,6 +31,7 @@ pub enum JsonError {
     NotString,
     NotArray,
     NotObject,
+    IOError(io::Error),
 }
 
 impl fmt::Display for JsonError {
@@ -37,7 +41,7 @@ impl fmt::Display for JsonError {
         use ::json::JsonError::{InvalidEscape, InvalidCodepoint, InvalidArray};
         use ::json::JsonError::{InvalidMap, DuplicateKey, InvalidJsonType};
         use ::json::JsonError::{NotBool, NotInteger, NotFloat, NotString};
-        use ::json::JsonError::{NotArray, NotObject};
+        use ::json::JsonError::{NotArray, NotObject, IOError};
 
         match self {
             MissingToken(s) => write!(f, "missing token at {}", s),
@@ -58,12 +62,19 @@ impl fmt::Display for JsonError {
             NotString => write!(f, "Json is not string"),
             NotArray => write!(f, "Json is not array"),
             NotObject => write!(f, "Json is not map"),
+            IOError(err) => write!(f, "io-error: {}", err),
         }
     }
 }
 
 impl error::Error for JsonError {
     fn cause(&self) -> Option<&error::Error> { None }
+}
+
+impl From<io::Error> for JsonError {
+    fn from(err: io::Error) -> JsonError {
+        JsonError::IOError(err)
+    }
 }
 
 struct Lex{ off: usize, row: usize, col: usize }
@@ -94,17 +105,27 @@ pub struct JsonBuf {
 }
 
 impl JsonBuf {
+    fn init(s: Option<String>, l: Option<Lex>) -> JsonBuf {
+        let inner = match s { Some(val) => val, None => String::new() };
+        let lex = match l { Some(val) => val, None => Lex::new(0, 1, 1) };
+        JsonBuf { inner, lex }
+    }
+
     pub fn new() -> JsonBuf {
-        JsonBuf{ inner: String::new(), lex: Lex::new(0, 1, 1) }
+        JsonBuf::init(None, None)
     }
 
     pub fn with_capacity(cap: usize) -> JsonBuf {
-        JsonBuf{ inner: String::with_capacity(cap), lex: Lex::new(0, 1, 1) }
+        JsonBuf::init(Some(String::with_capacity(cap)), None)
+    }
+
+    pub fn iter<R>(r: R) -> JsonIterate<R> where R: io::Read {
+        JsonIterate::new(r)
     }
 
     pub fn parse_str(text: &str) -> Result<Json> {
         let mut lex = Lex::new(0, 1, 1);
-        parse_value(&text[lex.off..], &mut lex)
+        parse_value(&text, &mut lex)
     }
 
     pub fn set<T>(&mut self, text: &T) where T: AsRef<str> + ?Sized {
@@ -119,22 +140,59 @@ impl JsonBuf {
 
     pub fn parse(&mut self) -> Result<Json> {
         self.lex.set(0, 1, 1);
-        let val = parse_value(&self.inner[self.lex.off..], &mut self.lex)?;
+        let val = parse_value(&self.inner, &mut self.lex)?;
         self.inner = self.inner[self.lex.off..].to_string(); // remaining text.
         Ok(val)
     }
-
 }
 
 impl From<String> for JsonBuf {
     fn from(s: String) -> JsonBuf {
-        JsonBuf{ inner: s, lex: Lex::new(0, 1, 1) }
+        JsonBuf::init(Some(s), None)
     }
 }
 
 impl<'a, T> From<&'a T> for JsonBuf where T: AsRef<str> + ?Sized {
     fn from(s: &'a T) -> JsonBuf {
         JsonBuf::from(s.as_ref().to_string())
+    }
+}
+
+pub struct JsonIterate<R> where R: io::Read {
+    inner: String,
+    lex: Lex,
+    reader: R,
+    buffer: Vec<u8>,
+}
+
+impl<R> JsonIterate<R> where R: io::Read {
+    const BLOCK_SIZE: usize = 1024;
+
+    fn new(reader: R) -> JsonIterate<R> {
+        let inner = String::with_capacity(Self::BLOCK_SIZE);
+        let buffer = Vec::with_capacity(Self::BLOCK_SIZE);
+        let lex = Lex::new(0, 1, 1);
+        JsonIterate{ inner, lex, reader, buffer }
+    }
+}
+
+impl<R> Iterator for JsonIterate<R> where R: io::Read {
+    type Item=Json;
+
+    fn next(&mut self) -> Option<Json> {
+        // TODO: automatically adjust the cap/len of self.buffer.
+        loop {
+            self.lex.set(0, 1, 1);
+            let v = match self.reader.read(&mut self.buffer) {
+                Ok(0) | Err(_) => return None,
+                Ok(n) => unsafe { str::from_utf8_unchecked(&self.buffer[..n]) },
+            };
+            self.inner.push_str(v);
+            if let Ok(val) = parse_value(&self.inner, &mut self.lex) {
+                self.inner = self.inner[self.lex.off..].to_string();
+                return Some(val)
+            }
+        }
     }
 }
 
@@ -485,7 +543,7 @@ impl Json {
             Bool(false) => text.push_str("false"),
             Integer(val) => write!(text, "{}", val).unwrap(),
             Float(val) => write!(text, "{:e}", val).unwrap(),
-            Json::String(val) => encode_string(&val, text),
+            Json::String(val) => Self::encode_string(&val, text),
             Array(val) => {
                 if val.len() == 0 {
                     text.push_str("[]");
@@ -507,7 +565,7 @@ impl Json {
                 } else {
                     text.push('{');
                     for (i, kv) in val.iter().enumerate() {
-                        encode_string(&kv.0, text);
+                        Self::encode_string(&kv.0, text);
                         text.push(':');
                         kv.1.to_json(text);
                         if i < (val_len - 1) { text.push(','); }
@@ -517,27 +575,27 @@ impl Json {
             }
         }
     }
-}
 
-fn encode_string(val: &str, text: &mut String) {
-    text.push('"');
+    fn encode_string(val: &str, text: &mut String) {
+        text.push('"');
 
-    let mut start = 0;
-    for (i, byte) in val.bytes().enumerate() {
-        let escstr = ESCAPE[byte as usize];
-        if escstr.len() == 0 { continue }
+        let mut start = 0;
+        for (i, byte) in val.bytes().enumerate() {
+            let escstr = ESCAPE[byte as usize];
+            if escstr.len() == 0 { continue }
 
-        if start < i {
-            text.push_str(&val[start..i]);
+            if start < i {
+                text.push_str(&val[start..i]);
+            }
+            text.push_str(escstr);
+            start = i + 1;
         }
-        text.push_str(escstr);
-        start = i + 1;
-    }
-    if start != val.len() {
-        text.push_str(&val[start..]);
-    }
+        if start != val.len() {
+            text.push_str(&val[start..]);
+        }
 
-    text.push('"');
+        text.push('"');
+    }
 }
 
 impl FromStr for Json {
@@ -674,6 +732,12 @@ mod tests {
     #[bench]
     fn bench_map(b: &mut Bencher) {
 	    let s = r#"{"a": null, "b" : true,"c":false, "d\"":-10E-1, "e":"tru\"e" }"#;
+        b.iter(|| {JsonBuf::parse_str(s).unwrap()});
+    }
+
+    #[bench]
+    fn bench_map_nom(b: &mut Bencher) {
+        let s = r#"  { "a": 42, "b": [ "x", "y", 12 ] , "c": { "hello" : "world" } } "#;
         b.iter(|| {JsonBuf::parse_str(s).unwrap()});
     }
 

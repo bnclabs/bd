@@ -1,6 +1,7 @@
 #![feature(test)]
 #![feature(never_type)]
 #![feature(try_from)]
+#![feature(shrink_to)]
 
 extern crate test;
 
