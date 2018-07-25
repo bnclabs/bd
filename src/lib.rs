@@ -2,10 +2,15 @@
 #![feature(never_type)]
 #![feature(try_from)]
 #![feature(shrink_to)]
+#![feature(unboxed_closures)]
+#![feature(fn_traits)]
+#![feature(box_patterns)]
+
 
 extern crate test;
 
 pub mod json;
+pub mod jq;
 mod lex;
 
 #[cfg(test)]

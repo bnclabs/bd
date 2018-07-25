@@ -164,8 +164,9 @@ impl<R> JsonIterate<R> where R: io::Read {
 
     fn new(reader: R) -> JsonIterate<R> {
         let inner = String::with_capacity(Self::BLOCK_SIZE);
-        let buffer = Vec::with_capacity(Self::BLOCK_SIZE);
+        let mut buffer = Vec::with_capacity(Self::BLOCK_SIZE);
         let lex = Lex::new(0, 1, 1);
+        unsafe{ buffer.set_len(Self::BLOCK_SIZE) };
         JsonIterate{ inner, lex, reader, buffer }
     }
 }
@@ -175,22 +176,22 @@ impl<R> Iterator for JsonIterate<R> where R: io::Read {
 
     fn next(&mut self) -> Option<Json> {
         // TODO: automatically adjust the cap/len of self.buffer.
+        self.lex.set(0, 1, 1);
         loop {
-            self.lex.set(0, 1, 1);
+            if let Ok(val) = parse_value(&self.inner, &mut self.lex) {
+                self.inner = self.inner[self.lex.off..].to_string();
+                return Some(val)
+            }
             let v = match self.reader.read(&mut self.buffer) {
                 Ok(0) | Err(_) => return None,
                 Ok(n) => unsafe { str::from_utf8_unchecked(&self.buffer[..n]) },
             };
             self.inner.push_str(v);
-            if let Ok(val) = parse_value(&self.inner, &mut self.lex) {
-                self.inner = self.inner[self.lex.off..].to_string();
-                return Some(val)
-            }
         }
     }
 }
 
-fn parse_value(text: &str, lex: &mut Lex) -> Result<Json> {
+pub fn parse_value(text: &str, lex: &mut Lex) -> Result<Json> {
     use json::JsonError::{InvalidToken, MissingToken};
     use json::JsonError::{InvalidFloat, InvalidInt};
 
@@ -469,7 +470,9 @@ pub fn parse_whitespace(text: &str, lex: &mut Lex) {
     }
 }
 
-fn get_by_key<'a>(map_list: &'a [KeyValue], key: &str) -> Option<&'a KeyValue> {
+pub fn get_by_key<'a>(map_list: &'a [KeyValue], key: &str)
+    -> Option<&'a KeyValue>
+{
     match map_list.len() {
         0 => None,
         n => match key.cmp(&map_list[n/2].0) {
@@ -495,7 +498,7 @@ fn insert_index(map_list: &[KeyValue], key: &str) -> Option<usize> {
 }
 
 #[derive(Debug,Clone)]
-pub struct KeyValue(String,Json);
+pub struct KeyValue(pub String, pub Json);
 
 impl Eq for KeyValue {}
 
@@ -530,7 +533,7 @@ pub enum Json {
 
 impl Json {
     pub fn to_json(&self, text: &mut String) {
-        use self::Json::{Null, Bool, Integer, Float, Array, Object};
+        use json::Json::{Null, Bool, Integer, Float, Array, Object};
         match self {
             Null => text.push_str("null"),
             Bool(true) => text.push_str("true"),
@@ -568,6 +571,22 @@ impl Json {
                 }
             }
         }
+    }
+
+    pub fn bool(self) -> bool {
+        match self { Json::Bool(v) => v, _ => panic!("{:?} not bool", self) }
+    }
+
+    pub fn string(self) -> String {
+        match self {Json::String(v) => v, _ => panic!("{:?} not string", self)}
+    }
+
+    pub fn array(self) -> Vec<Json> {
+        match self {Json::Array(v) => v, _ => panic!("{:?} not array", self)}
+    }
+
+    pub fn object(self) -> Vec<KeyValue> {
+        match self {Json::Object(v) => v, _ => panic!("{:?} not string", self)}
     }
 
     fn encode_string(val: &str, text: &mut String) {
@@ -695,6 +714,26 @@ mod tests {
         }
     }
 
+    #[test]
+    fn test_json_iter() {
+        use self::Json::{Integer, Float, Bool, Array, Object};
+
+        let docs = r#"null 10 10.2 "hello world" true false [1,2] {"a":10}"#;
+        let docs: &[u8] = docs.as_ref();
+        let mut iter = JsonBuf::iter(docs);
+        assert_eq!(Some(Json::Null), iter.next());
+        assert_eq!(Some(Integer(10)), iter.next());
+        assert_eq!(Some(Float(10.2)), iter.next());
+        assert_eq!(Some(Json::String("hello world".to_string())), iter.next());
+        assert_eq!(Some(Bool(true)), iter.next());
+        assert_eq!(Some(Bool(false)), iter.next());
+        assert_eq!(Some(Array(vec![Integer(1), Integer(2)])), iter.next());
+        assert_eq!(
+            Some(Object(vec![KeyValue("a".to_string(), Integer(10))])),
+            iter.next(),
+        );
+    }
+
     #[bench]
     fn bench_null(b: &mut Bencher) {
         b.iter(|| {JsonBuf::parse_str("null").unwrap()});
@@ -724,13 +763,13 @@ mod tests {
 
     #[bench]
     fn bench_map(b: &mut Bencher) {
-	    let s = r#"{"a": null, "b" : true,"c":false, "d\"":-10E-1, "e":"tru\"e" }"#;
+	    let s = r#"{"a": null,"b":true,"c":false,"d\"":-10E-1,"e":"tru\"e"}"#;
         b.iter(|| {JsonBuf::parse_str(s).unwrap()});
     }
 
     #[bench]
     fn bench_map_nom(b: &mut Bencher) {
-        let s = r#"  { "a": 42, "b": [ "x", "y", 12 ] , "c": { "hello" : "world" } } "#;
+        let s = r#"  { "a": 42, "b": ["x","y",12 ] , "c": {"hello":"world"}} "#;
         b.iter(|| {JsonBuf::parse_str(s).unwrap()});
     }
 
@@ -773,7 +812,7 @@ mod tests {
 
     #[bench]
     fn bench_map_to_json(b: &mut Bencher) {
-	    let inp = r#"{"a": null, "b" : true,"c":false, "d\"":-10E-1, "e":"tru\"e" }"#;
+	    let inp = r#"{"a": null,"b":true,"c":false,"d\"":-10E-1,"e":"tru\"e"}"#;
         let val = JsonBuf::parse_str(inp).unwrap();
         let mut outs = String::with_capacity(64);
         b.iter(|| {outs.clear(); val.to_json(&mut outs)});
