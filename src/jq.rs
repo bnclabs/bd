@@ -1,4 +1,37 @@
-struct PathExpr(String);
+use json::parse_whitespace;
+
+pub type Result<T> = result::Result<T,JqError>;
+
+pub enum JqError {
+    MissingToken(String),
+}
+
+impl fmt::Display for JqError {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        use JqError::{MissingToken};
+
+        match self {
+            MissingToken(s) => write!(f, "missing token at {}", s),
+        }
+    }
+}
+
+impl error::Error for JsonError {
+    fn cause(&self) -> Option<&error::Error> { None }
+}
+
+
+
+pub fn parse_program(text: &str, lex: &mut Lex) -> Result<Thunk> {
+    use JsonError::MissingToken;
+
+    parse_whitespace(text, lex)
+
+    let valtext = &text[lex.off..];
+    if valtext.len() == 0 {
+        return Err(MissingToken(lex.format()))
+    }
+}
 
 enum Thunk<I> where I: Iterator<Item=Json> {
     Source(I),

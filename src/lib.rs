@@ -5,8 +5,8 @@
 
 extern crate test;
 
-pub mod jsonpointer;
 pub mod json;
+mod lex;
 
 #[cfg(test)]
 mod tests {

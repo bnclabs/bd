@@ -1,11 +1,11 @@
-use std::{
-    {result, char, error},
-    str::{self, FromStr,CharIndices},
-    fmt::{self, Write},
-    convert::{TryFrom,TryInto},
-    cmp::Ordering,
-    io,
-};
+use std::{self, result, char, error};
+use std::str::{self, FromStr,CharIndices};
+use std::fmt::{self, Write};
+use std::convert::{TryFrom,TryInto};
+use std::cmp::Ordering;
+use std::io;
+
+use lex::Lex;
 
 include!("./json.rs.lookup");
 
@@ -17,8 +17,9 @@ pub enum JsonError {
     InvalidToken(String),
     InvalidNull(String),
     InvalidBoolean(String),
-    InvalidNumber(String),
     InvalidString(String),
+    InvalidFloat(std::num::ParseFloatError, String),
+    InvalidInt(std::num::ParseIntError, String),
     InvalidEscape(String),
     InvalidCodepoint(String),
     InvalidArray(String),
@@ -31,24 +32,23 @@ pub enum JsonError {
     NotString,
     NotArray,
     NotObject,
-    IOError(io::Error),
 }
 
 impl fmt::Display for JsonError {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        use ::json::JsonError::{MissingToken, InvalidToken, InvalidNull};
-        use ::json::JsonError::{InvalidBoolean, InvalidNumber, InvalidString};
-        use ::json::JsonError::{InvalidEscape, InvalidCodepoint, InvalidArray};
-        use ::json::JsonError::{InvalidMap, DuplicateKey, InvalidJsonType};
-        use ::json::JsonError::{NotBool, NotInteger, NotFloat, NotString};
-        use ::json::JsonError::{NotArray, NotObject, IOError};
+        use json::JsonError::{MissingToken, InvalidToken, InvalidNull};
+        use json::JsonError::{InvalidBoolean, InvalidString};
+        use json::JsonError::{InvalidEscape, InvalidCodepoint, InvalidArray};
+        use json::JsonError::{InvalidMap, DuplicateKey, InvalidJsonType};
+        use json::JsonError::{NotBool, NotInteger, NotFloat, NotString};
+        use json::JsonError::{NotArray, NotObject};
+        use json::JsonError::{InvalidFloat, InvalidInt};
 
         match self {
             MissingToken(s) => write!(f, "missing token at {}", s),
             InvalidToken(s) => write!(f, "invalid token at {}", s),
             InvalidNull(s) => write!(f, "null expected at {}", s),
             InvalidBoolean(s) => write!(f, "boolean expected at {}", s),
-            InvalidNumber(s) => write!(f, "invalid number {}", s),
             InvalidString(s) => write!(f, "invalid string at {}", s),
             InvalidEscape(s) => write!(f, "invalid string escape at {}", s),
             InvalidCodepoint(s) => write!(f, "invalid codepoint in string {}", s),
@@ -62,40 +62,34 @@ impl fmt::Display for JsonError {
             NotString => write!(f, "Json is not string"),
             NotArray => write!(f, "Json is not array"),
             NotObject => write!(f, "Json is not map"),
-            IOError(err) => write!(f, "io-error: {}", err),
+            InvalidFloat(err, s) => write!(f, "invalid float: {} at {}", err, s),
+            InvalidInt(err, s) => write!(f, "invalid int: {} at {}", err, s),
         }
     }
 }
 
 impl error::Error for JsonError {
-    fn cause(&self) -> Option<&error::Error> { None }
-}
+    fn cause(&self) -> Option<&error::Error> {
+        use json::JsonError::{InvalidFloat, InvalidInt};
 
-impl From<io::Error> for JsonError {
-    fn from(err: io::Error) -> JsonError {
-        JsonError::IOError(err)
+        match self {
+            InvalidFloat(err, _) => Some(err),
+            InvalidInt(err, _) => Some(err),
+            _ => None,
+        }
     }
 }
 
-struct Lex{ off: usize, row: usize, col: usize }
-
-impl Lex {
-    fn new(off: usize, row: usize, col: usize) -> Lex {
-        Lex{off, row, col}
+impl From<std::num::ParseFloatError> for JsonError {
+    fn from(err: std::num::ParseFloatError) -> JsonError {
+        JsonError::InvalidFloat(err, String::new())
     }
+}
 
-    fn incr_col(&mut self, i: usize) {
-        self.off += i;
-        self.col += i;
-    }
 
-    #[inline]
-    fn set(&mut self, off: usize, row: usize, col: usize) {
-        self.off = off; self.row = row; self.col = col;
-    }
-
-    fn format(&self) -> String {
-        format!("offset:{} line:{} col:{}", self.off, self.row, self.col)
+impl From<std::num::ParseIntError> for JsonError {
+    fn from(err: std::num::ParseIntError) -> JsonError {
+        JsonError::InvalidInt(err, String::new())
     }
 }
 
@@ -196,10 +190,9 @@ impl<R> Iterator for JsonIterate<R> where R: io::Read {
     }
 }
 
-fn parse_value(text: &str, lex: &mut Lex)
-    -> Result<Json>
-{
-    use ::json::JsonError::{InvalidToken, MissingToken};
+fn parse_value(text: &str, lex: &mut Lex) -> Result<Json> {
+    use json::JsonError::{InvalidToken, MissingToken};
+    use json::JsonError::{InvalidFloat, InvalidInt};
 
     parse_whitespace(text, lex);
 
@@ -209,19 +202,24 @@ fn parse_value(text: &str, lex: &mut Lex)
     }
 
     //println!("text -- {:?}", valtext);
-    let val = match valtext.as_bytes()[0] {
-        b'n' => parse_null(text, lex)?,
-        b't' => parse_true(text, lex)?,
-        b'f' => parse_false(text, lex)?,
-        b'0'..=b'9'|b'+'|b'-'|b'.'|b'e'|b'E' => parse_num(text, lex)?,
-        b'"' => parse_string(text, lex)?,
-        b'[' => parse_array(text, lex)?,
-        b'{' => parse_object(text, lex)?,
-        _ => return Err(InvalidToken(lex.format()))
+    let v = match valtext.as_bytes()[0] {
+        b'n' => parse_null(text, lex),
+        b't' => parse_true(text, lex),
+        b'f' => parse_false(text, lex),
+        b'0'..=b'9'|b'+'|b'-'|b'.'|b'e'|b'E' => parse_num(text, lex),
+        b'"' => parse_string(text, lex),
+        b'[' => parse_array(text, lex),
+        b'{' => parse_object(text, lex),
+        _ => Err(InvalidToken(lex.format())),
     };
-    //println!("valu -- {:?}", val);
+    //println!("valu -- {:?}", v);
 
-    Ok(val)
+    // gather up lexical position for a subset of error-variants.
+    match v {
+        Err(InvalidFloat(e, _)) => Err(InvalidFloat(e, lex.format())),
+        Err(InvalidInt(e, _)) => Err(InvalidInt(e, lex.format())),
+        rc => rc,
+    }
 }
 
 fn parse_null(text: &str, lex: &mut Lex) -> Result<Json> {
@@ -259,15 +257,11 @@ fn parse_num(text: &str, lex: &mut Lex) -> Result<Json> {
     let mut doparse = |text: &str, i: usize, is_float: bool| -> Result<Json> {
         lex.incr_col(i);
         if is_float {
-            if let Ok(val) = text.parse::<f64>() {
-                return Ok(Json::Float(val))
-            }
-            Err(JsonError::InvalidNumber(lex.format()))
+            let val = text.parse::<f64>()?;
+            Ok(Json::Float(val))
         } else {
-            if let Ok(val) = text.parse::<i128>() {
-                return Ok(Json::Integer(val))
-            }
-            Err(JsonError::InvalidNumber(lex.format()))
+            let val = text.parse::<i128>()?;
+            Ok(Json::Integer(val))
         }
     };
 
@@ -284,7 +278,7 @@ fn parse_num(text: &str, lex: &mut Lex) -> Result<Json> {
 }
 
 fn parse_string(text: &str, lex: &mut Lex) -> Result<Json> {
-    use ::json::JsonError::{InvalidString, InvalidEscape, InvalidCodepoint};
+    use json::JsonError::{InvalidString, InvalidEscape, InvalidCodepoint};
 
     let mut escape = false;
     let mut res = String::new();
@@ -391,7 +385,7 @@ fn decode_json_hex_code2(chars: &mut CharIndices, lex: &mut Lex)
 fn parse_array(text: &str, lex: &mut Lex)
     -> Result<Json>
 {
-    use ::json::JsonError::InvalidArray;
+    use json::JsonError::InvalidArray;
 
     lex.incr_col(1); // skip '['
 
@@ -419,7 +413,7 @@ fn parse_array(text: &str, lex: &mut Lex)
 fn parse_object(text: &str, lex: &mut Lex)
     -> Result<Json>
 {
-    use ::json::JsonError::{InvalidMap, DuplicateKey};
+    use json::JsonError::{InvalidMap, DuplicateKey};
 
     lex.incr_col(1); // skip '{'
 
@@ -463,7 +457,7 @@ fn parse_object(text: &str, lex: &mut Lex)
     }
 }
 
-fn parse_whitespace(text: &str, lex: &mut Lex) {
+pub fn parse_whitespace(text: &str, lex: &mut Lex) {
     for &ch in (&text[lex.off..]).as_bytes() {
         match WS_LOOKUP[ch as usize] {
             0 => break,
@@ -683,7 +677,6 @@ mod tests {
         let index = insert_index(&obj, &kv.0).unwrap();
         obj.insert(index, kv);
         refs[refs_len - n] = Object(obj);
-        n -= 1;
 
         for (i, json) in jsons.iter().enumerate() {
             jsonbuf.set(json);
