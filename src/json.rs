@@ -1,97 +1,56 @@
-use std::{self, result, char, error};
+use std::{self, result, char, error, io};
 use std::str::{self, FromStr,CharIndices};
 use std::fmt::{self, Write};
-use std::convert::{TryFrom,TryInto};
 use std::cmp::Ordering;
-use std::io;
 
 use lex::Lex;
 
 include!("./json.rs.lookup");
 
-pub type Result<T> = result::Result<T,JsonError>;
+pub type Result<T> = result::Result<T,Error>;
 
 #[derive(Debug)]
-pub enum JsonError {
-    MissingToken(String),
-    InvalidToken(String),
-    InvalidNull(String),
-    InvalidBoolean(String),
-    InvalidString(String),
-    InvalidFloat(std::num::ParseFloatError, String),
-    InvalidInt(std::num::ParseIntError, String),
-    InvalidEscape(String),
-    InvalidCodepoint(String),
-    InvalidArray(String),
-    InvalidMap(String),
-    DuplicateKey(String),
-    InvalidJsonType(String),
-    NotBool,
-    NotInteger,
-    NotFloat,
-    NotString,
-    NotArray,
-    NotObject,
+pub enum Error {
+    Parse(String),
+    Float(std::num::ParseFloatError, String),
+    Int(std::num::ParseIntError, String),
 }
 
-impl fmt::Display for JsonError {
+impl fmt::Display for Error {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        use json::JsonError::{MissingToken, InvalidToken, InvalidNull};
-        use json::JsonError::{InvalidBoolean, InvalidString};
-        use json::JsonError::{InvalidEscape, InvalidCodepoint, InvalidArray};
-        use json::JsonError::{InvalidMap, DuplicateKey, InvalidJsonType};
-        use json::JsonError::{NotBool, NotInteger, NotFloat, NotString};
-        use json::JsonError::{NotArray, NotObject};
-        use json::JsonError::{InvalidFloat, InvalidInt};
+        use json::Error::*;
 
         match self {
-            MissingToken(s) => write!(f, "missing token at {}", s),
-            InvalidToken(s) => write!(f, "invalid token at {}", s),
-            InvalidNull(s) => write!(f, "null expected at {}", s),
-            InvalidBoolean(s) => write!(f, "boolean expected at {}", s),
-            InvalidString(s) => write!(f, "invalid string at {}", s),
-            InvalidEscape(s) => write!(f, "invalid string escape at {}", s),
-            InvalidCodepoint(s) => write!(f, "invalid codepoint in string {}", s),
-            InvalidArray(s) => write!(f, "invalid array at {}", s),
-            InvalidMap(s) => write!(f, "invalid map at {}", s),
-            DuplicateKey(s) => write!(f, "duplicate key in map at {}", s),
-            InvalidJsonType(s) => write!(f, "invalid json type at {}", s),
-            NotBool => write!(f, "Json is not boolean"),
-            NotInteger => write!(f, "Json is not integer"),
-            NotFloat => write!(f, "Json is not float"),
-            NotString => write!(f, "Json is not string"),
-            NotArray => write!(f, "Json is not array"),
-            NotObject => write!(f, "Json is not map"),
-            InvalidFloat(err, s) => write!(f, "invalid float: {} at {}", err, s),
-            InvalidInt(err, s) => write!(f, "invalid int: {} at {}", err, s),
+            Parse(s) => write!(f, "{}", s),
+            Float(err, s) => write!(f, "invalid float: {} at {}", err, s),
+            Int(err, s) => write!(f, "invalid int: {} at {}", err, s),
         }
     }
 }
 
-impl error::Error for JsonError {
+impl error::Error for Error {
     fn cause(&self) -> Option<&error::Error> {
-        use json::JsonError::{InvalidFloat, InvalidInt};
-
         match self {
-            InvalidFloat(err, _) => Some(err),
-            InvalidInt(err, _) => Some(err),
+            Error::Float(err, _) => Some(err),
+            Error::Int(err, _) => Some(err),
             _ => None,
         }
     }
 }
 
-impl From<std::num::ParseFloatError> for JsonError {
-    fn from(err: std::num::ParseFloatError) -> JsonError {
-        JsonError::InvalidFloat(err, String::new())
+impl From<std::num::ParseFloatError> for Error {
+    fn from(err: std::num::ParseFloatError) -> Error {
+        Error::Float(err, String::new())
+    }
+}
+
+impl From<std::num::ParseIntError> for Error {
+    fn from(err: std::num::ParseIntError) -> Error {
+        Error::Int(err, String::new())
     }
 }
 
 
-impl From<std::num::ParseIntError> for JsonError {
-    fn from(err: std::num::ParseIntError) -> JsonError {
-        JsonError::InvalidInt(err, String::new())
-    }
-}
 
 pub struct JsonBuf {
     inner: String,
@@ -152,6 +111,7 @@ impl<'a, T> From<&'a T> for JsonBuf where T: AsRef<str> + ?Sized {
     }
 }
 
+
 pub struct JsonIterate<R> where R: io::Read {
     inner: String,
     lex: Lex,
@@ -191,19 +151,13 @@ impl<R> Iterator for JsonIterate<R> where R: io::Read {
     }
 }
 
+
 pub fn parse_value(text: &str, lex: &mut Lex) -> Result<Json> {
-    use json::JsonError::{InvalidToken, MissingToken};
-    use json::JsonError::{InvalidFloat, InvalidInt};
-
     parse_whitespace(text, lex);
-
-    let valtext = &text[lex.off..];
-    if valtext.len() == 0 {
-        return Err(MissingToken(lex.format()))
-    }
+    check_eof(text, lex)?;
 
     //println!("text -- {:?}", valtext);
-    let v = match valtext.as_bytes()[0] {
+    let v = match (&text[lex.off..]).as_bytes()[0] {
         b'n' => parse_null(text, lex),
         b't' => parse_true(text, lex),
         b'f' => parse_false(text, lex),
@@ -211,14 +165,22 @@ pub fn parse_value(text: &str, lex: &mut Lex) -> Result<Json> {
         b'"' => parse_string(text, lex),
         b'[' => parse_array(text, lex),
         b'{' => parse_object(text, lex),
-        _ => Err(InvalidToken(lex.format())),
+        ch => {
+            Err(Error::Parse(lex.format(&format!("invalid token {}", ch))))
+        }
     };
     //println!("valu -- {:?}", v);
 
     // gather up lexical position for a subset of error-variants.
     match v {
-        Err(InvalidFloat(e, _)) => Err(InvalidFloat(e, lex.format())),
-        Err(InvalidInt(e, _)) => Err(InvalidInt(e, lex.format())),
+        Err(Error::Float(e, _)) => {
+            Err(Error::Float(e, lex.format("invalid float")))
+        },
+
+        Err(Error::Int(e, _)) => {
+            Err(Error::Int(e, lex.format("invalid integer")))
+        }
+
         rc => rc,
     }
 }
@@ -229,7 +191,7 @@ fn parse_null(text: &str, lex: &mut Lex) -> Result<Json> {
         lex.incr_col(4);
         Ok(Json::Null)
     } else {
-        Err(JsonError::InvalidNull(lex.format()))
+        Err(Error::Parse(lex.format("expected null")))
     }
 }
 
@@ -239,7 +201,7 @@ fn parse_true(text: &str, lex: &mut Lex) -> Result<Json> {
         lex.incr_col(4);
         Ok(Json::Bool(true))
     } else {
-        Err(JsonError::InvalidBoolean(lex.format()))
+        Err(Error::Parse(lex.format("expected true")))
     }
 }
 
@@ -249,7 +211,7 @@ fn parse_false(text: &str, lex: &mut Lex) -> Result<Json> {
         lex.incr_col(5);
         Ok(Json::Bool(false))
     } else {
-        Err(JsonError::InvalidBoolean(lex.format()))
+        Err(Error::Parse(lex.format("expected false")))
     }
 }
 
@@ -278,16 +240,14 @@ fn parse_num(text: &str, lex: &mut Lex) -> Result<Json> {
     doparse(text, text.len(), is_float)
 }
 
-fn parse_string(text: &str, lex: &mut Lex) -> Result<Json> {
-    use json::JsonError::{InvalidString, InvalidEscape, InvalidCodepoint};
-
+pub fn parse_string(text: &str, lex: &mut Lex) -> Result<Json> {
     let mut escape = false;
     let mut res = String::new();
     let mut chars = (&text[lex.off..]).char_indices();
 
     let (i, ch) = chars.next().unwrap(); // skip the opening quote
     if ch != '"' {
-        return Err(InvalidString(lex.format()))
+        return Err(Error::Parse(lex.format("not a string")))
     }
 
     while let Some((i, ch)) = chars.next() {
@@ -297,7 +257,10 @@ fn parse_string(text: &str, lex: &mut Lex) -> Result<Json> {
                 continue
             }
             match ch {
-                '"' => { lex.incr_col(i+1); return Ok(Json::String(res)); },
+                '"' => {
+                    lex.incr_col(i+1);
+                    return Ok(Json::String(res));
+                },
                 _ => res.push(ch),
             }
             continue
@@ -314,9 +277,10 @@ fn parse_string(text: &str, lex: &mut Lex) -> Result<Json> {
             'r' => res.push('\r'),
             't' => res.push('\t'),
             'u' => match decode_json_hex_code(&mut chars, lex)? {
-                0xDC00 ... 0xDFFF => {
+                code1 @ 0xDC00 ... 0xDFFF => {
                     lex.incr_col(i);
-                    return Err(InvalidString(lex.format()))
+                    let err = format!("invalid string codepoint {}", code1);
+                    return Err(Error::Parse(lex.format(&err)))
                 },
                 // Non-BMP characters are encoded as a sequence of
                 // two hex escapes, representing UTF-16 surrogates.
@@ -324,7 +288,8 @@ fn parse_string(text: &str, lex: &mut Lex) -> Result<Json> {
                     let code2 = decode_json_hex_code2(&mut chars, lex)?;
                     if code2 < 0xDC00 || code2 > 0xDFFF {
                         lex.incr_col(i);
-                        return Err(InvalidString(lex.format()))
+                        let err = format!("invalid string codepoint {}", code2);
+                        return Err(Error::Parse(lex.format(&err)))
                     }
                     let code = (((code1 - 0xD800) as u32) << 10 |
                                  (code2 - 0xDC00) as u32) + 0x1_0000;
@@ -335,19 +300,21 @@ fn parse_string(text: &str, lex: &mut Lex) -> Result<Json> {
                     Some(ch) => res.push(ch),
                     None => {
                         lex.incr_col(i);
-                        return Err(InvalidCodepoint(lex.format()))
+                        let err = format!("invalid string escape code {:?}", n);
+                        return Err(Error::Parse(lex.format(&err)))
                     },
                 },
             },
             _ => {
                 lex.incr_col(i);
-                return Err(InvalidEscape(lex.format()))
+                let err = "invalid string string escape type";
+                return Err(Error::Parse(lex.format(&err)))
             },
         }
         escape = false;
     }
     lex.incr_col(i);
-    return Err(InvalidString(lex.format()))
+    return Err(Error::Parse(lex.format("incomplete string")))
 }
 
 fn decode_json_hex_code(chars: &mut CharIndices, lex: &mut Lex)
@@ -357,14 +324,18 @@ fn decode_json_hex_code(chars: &mut CharIndices, lex: &mut Lex)
     let mut code = 0_u32;
     while let Some((_, ch)) = chars.next() {
         if (ch as u8) > 128 || HEXNUM[ch as usize] == 20 {
-            return Err(JsonError::InvalidString(lex.format()))
+            let err = format!("invalid string escape code {:?}", ch);
+            return Err(Error::Parse(lex.format(&err)))
         }
         code = code * 16 + (HEXNUM[ch as usize] as u32);
         n += 1;
-        if n == 4 { break }
+        if n == 4 {
+            break
+        }
     }
     if n != 4 {
-        return Err(JsonError::InvalidString(lex.format()))
+        let err = format!("incomplete string escape code {:x}", code);
+        return Err(Error::Parse(lex.format(&err)))
     }
     Ok(code)
 }
@@ -379,21 +350,20 @@ fn decode_json_hex_code2(chars: &mut CharIndices, lex: &mut Lex)
             }
         }
     }
-    return Err(JsonError::InvalidString(lex.format()))
+    let err = "invalid string string escape type";
+    return Err(Error::Parse(lex.format(err)))
 }
 
 
 fn parse_array(text: &str, lex: &mut Lex)
     -> Result<Json>
 {
-    use json::JsonError::InvalidArray;
-
     lex.incr_col(1); // skip '['
 
     let mut array = Vec::new();
     parse_whitespace(text, lex);
     if (&text[lex.off..]).as_bytes()[0] == b',' {
-        return Err(InvalidArray(lex.format()))
+        return Err(Error::Parse(lex.format("expected ','")))
     }
     loop {
         if (&text[lex.off..]).as_bytes()[0] == b']' { // end of array.
@@ -414,8 +384,6 @@ fn parse_array(text: &str, lex: &mut Lex)
 fn parse_object(text: &str, lex: &mut Lex)
     -> Result<Json>
 {
-    use json::JsonError::{InvalidMap, DuplicateKey};
-
     lex.incr_col(1); // skip '{'
 
     let mut map = Vec::new();
@@ -427,28 +395,30 @@ fn parse_object(text: &str, lex: &mut Lex)
     loop {
         // key
         parse_whitespace(text, lex);
-        let key: String = parse_string(text, lex)?.try_into().unwrap();
+        let key: String = parse_string(text, lex)?.string();
         // colon
         parse_whitespace(text, lex);
-        if (&text[lex.off..]).len() == 0 {
-            break Err(InvalidMap(lex.format()))
-        } else if (&text[lex.off..]).as_bytes()[0] != b':' {
-            break Err(InvalidMap(lex.format()))
-        }
-        lex.incr_col(1); // skip ':'
+        check_next_byte(text, lex, b':')?;
+
         // value
         parse_whitespace(text, lex);
         let value = parse_value(text, lex)?;
 
         match insert_index(&map, &key) {
-            Some(index) => map.insert(index, KeyValue(key, value)),
-            None => break Err(DuplicateKey(lex.format()))
+            Some(index) => {
+                map.insert(index, KeyValue(key, value))
+            },
+
+            None => {
+                let err = format!("duplicate key {}", key);
+                break Err(Error::Parse(lex.format(&err)))
+            }
         }
 
         // is exit
         parse_whitespace(text, lex);
         if (&text[lex.off..]).len() == 0 {
-            break Err(InvalidMap(lex.format()))
+            break Err(Error::Parse(lex.format("unexpected eof")))
         } else if (&text[lex.off..]).as_bytes()[0] == b'}' { // exit
             lex.incr_col(1);
             break Ok(Json::Object(map))
@@ -470,18 +440,32 @@ pub fn parse_whitespace(text: &str, lex: &mut Lex) {
     }
 }
 
-pub fn get_by_key<'a>(map_list: &'a [KeyValue], key: &str)
-    -> Option<&'a KeyValue>
-{
-    match map_list.len() {
-        0 => None,
-        n => match key.cmp(&map_list[n/2].0) {
-            Ordering::Equal => Some(&map_list[n/2]),
-            Ordering::Less => get_by_key(&map_list[..n/2], key),
-            Ordering::Greater => get_by_key(&map_list[n/2+1..], key),
-        },
+fn check_next_byte(text: &str, lex: &mut Lex, b: u8) -> Result<()> {
+    let progbytes = (&text[lex.off..]).as_bytes();
+
+    if progbytes.len() == 0 {
+        let err = format!("missing token {}", b);
+        return Err(Error::Parse(lex.format(&err)))
+    }
+
+    if progbytes[0] != b {
+        let err = format!("invalid token {}", b);
+        return Err(Error::Parse(lex.format(&err)))
+    }
+    lex.incr_col(1);
+
+    Ok(())
+}
+
+fn check_eof(text: &str, lex: &mut Lex) -> Result<()> {
+    if (&text[lex.off..]).len() == 0 {
+        Err(Error::Parse(lex.format("unexpected eof")))
+
+    } else {
+        Ok(())
     }
 }
+
 
 fn insert_index(map_list: &[KeyValue], key: &str) -> Option<usize> {
     match map_list.len() {
@@ -517,6 +501,12 @@ impl PartialOrd for KeyValue {
 impl Ord for KeyValue {
     fn cmp(&self, other: &KeyValue) -> Ordering {
         self.0.cmp(&other.0) // compare only the key.
+    }
+}
+
+impl From<String> for KeyValue {
+    fn from(key: String) -> KeyValue {
+        KeyValue(key, Json::Null)
     }
 }
 
@@ -573,20 +563,44 @@ impl Json {
         }
     }
 
+    pub fn is_bool(self) -> bool {
+        match self { Json::Bool(_) => true, _ => false }
+    }
+
     pub fn bool(self) -> bool {
         match self { Json::Bool(v) => v, _ => panic!("{:?} not bool", self) }
+    }
+
+    pub fn is_string(self) -> bool {
+        match self { Json::String(_) => true, _ => false }
     }
 
     pub fn string(self) -> String {
         match self {Json::String(v) => v, _ => panic!("{:?} not string", self)}
     }
 
+    pub fn is_array(self) -> bool {
+        match self { Json::Array(_) => true, _ => false }
+    }
+
     pub fn array(self) -> Vec<Json> {
         match self {Json::Array(v) => v, _ => panic!("{:?} not array", self)}
     }
 
-    pub fn object(self) -> Vec<KeyValue> {
+    pub fn is_object(self) -> bool {
+        match self { Json::Object(_) => true, _ => false }
+    }
+
+    pub fn object(&self) -> &Vec<KeyValue> {
         match self {Json::Object(v) => v, _ => panic!("{:?} not string", self)}
+    }
+
+    pub fn get_by_key(&self, key: KeyValue) -> Option<Json> {
+        let m = self.object();
+        match m.binary_search(&key) {
+            Ok(i) => Some(m[i].1.clone()),
+            Err(_) => None
+        }
     }
 
     fn encode_string(val: &str, text: &mut String) {
@@ -609,55 +623,14 @@ impl Json {
 
         text.push('"');
     }
+
 }
 
 impl FromStr for Json {
-    type Err=JsonError;
+    type Err=Error;
 
     fn from_str(s: &str) -> Result<Json> {
         JsonBuf::parse_str(s)
-    }
-}
-
-impl TryFrom<Json> for bool {
-    type Error=JsonError;
-    fn try_from(val: Json) -> result::Result<bool, JsonError> {
-        match val { Json::Bool(s) => Ok(s), _ => Err(JsonError::NotBool) }
-    }
-}
-
-impl TryFrom<Json> for i128 {
-    type Error=JsonError;
-    fn try_from(val: Json) -> result::Result<i128, JsonError> {
-        match val { Json::Integer(s) => Ok(s), _ => Err(JsonError::NotInteger) }
-    }
-}
-
-impl TryFrom<Json> for f64 {
-    type Error=JsonError;
-    fn try_from(val: Json) -> result::Result<f64, JsonError> {
-        match val { Json::Float(s) => Ok(s), _ => Err(JsonError::NotFloat) }
-    }
-}
-
-impl TryFrom<Json> for String {
-    type Error=JsonError;
-    fn try_from(val: Json) -> result::Result<String, JsonError> {
-        match val { Json::String(s) => Ok(s), _ => Err(JsonError::NotString) }
-    }
-}
-
-impl TryFrom<Json> for Vec<Json> {
-    type Error=JsonError;
-    fn try_from(val: Json) -> result::Result<Vec<Json>, JsonError> {
-        match val { Json::Array(s) => Ok(s), _ => Err(JsonError::NotArray) }
-    }
-}
-
-impl TryFrom<Json> for Vec<KeyValue> {
-    type Error=JsonError;
-    fn try_from(val: Json) -> result::Result<Vec<KeyValue>, JsonError> {
-        match val { Json::Object(s) => Ok(s), _ => Err(JsonError::NotObject) }
     }
 }
 

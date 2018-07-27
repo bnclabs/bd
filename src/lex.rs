@@ -14,7 +14,10 @@ impl Lex {
         self.off = off; self.row = row; self.col = col;
     }
 
-    pub fn format(&self) -> String {
-        format!("offset:{} line:{} col:{}", self.off, self.row, self.col)
+    pub fn format(&self, prefix: &str) -> String {
+        format!(
+            "{} offset:{} line:{} col:{}",
+            prefix, self.off, self.row, self.col
+        )
     }
 }
