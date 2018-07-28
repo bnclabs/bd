@@ -4,3 +4,8 @@ version = "0.1.0"
 authors = ["prataprc <prataprc@gmail.com>"]
 
 [dependencies]
+regex = "1"
+
+[dependencies.nom]
+version = "4.0.0"
+features = ["regexp", "regexp_macros"]

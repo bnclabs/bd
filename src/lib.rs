@@ -7,9 +7,11 @@
 
 
 extern crate test;
+extern crate regex;
+#[macro_use] extern crate nom;
 
 pub mod json;
-//pub mod jq;
+pub mod jq;
 mod lex;
 
 #[cfg(test)]

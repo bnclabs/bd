@@ -7,7 +7,9 @@ use lex::Lex;
 
 include!("./json.rs.lookup");
 
+
 pub type Result<T> = result::Result<T,Error>;
+
 
 #[derive(Debug)]
 pub enum Error {
@@ -22,8 +24,8 @@ impl fmt::Display for Error {
 
         match self {
             Parse(s) => write!(f, "{}", s),
-            Float(err, s) => write!(f, "invalid float: {} at {}", err, s),
-            Int(err, s) => write!(f, "invalid int: {} at {}", err, s),
+            Float(err, s) => write!(f, "{}, {}", err, s),
+            Int(err, s) => write!(f, "{}, {}", err, s),
         }
     }
 }
@@ -355,7 +357,7 @@ fn decode_json_hex_code2(chars: &mut CharIndices, lex: &mut Lex)
 }
 
 
-fn parse_array(text: &str, lex: &mut Lex)
+pub fn parse_array(text: &str, lex: &mut Lex)
     -> Result<Json>
 {
     lex.incr_col(1); // skip '['
@@ -381,7 +383,7 @@ fn parse_array(text: &str, lex: &mut Lex)
     }
 }
 
-fn parse_object(text: &str, lex: &mut Lex)
+pub fn parse_object(text: &str, lex: &mut Lex)
     -> Result<Json>
 {
     lex.incr_col(1); // skip '{'
@@ -444,13 +446,11 @@ fn check_next_byte(text: &str, lex: &mut Lex, b: u8) -> Result<()> {
     let progbytes = (&text[lex.off..]).as_bytes();
 
     if progbytes.len() == 0 {
-        let err = format!("missing token {}", b);
-        return Err(Error::Parse(lex.format(&err)))
+        return Err(Error::Parse(lex.format(&format!("missing token {}", b))));
     }
 
     if progbytes[0] != b {
-        let err = format!("invalid token {}", b);
-        return Err(Error::Parse(lex.format(&err)))
+        return Err(Error::Parse(lex.format(&format!("invalid token {}", b))));
     }
     lex.incr_col(1);
 
@@ -591,13 +591,16 @@ impl Json {
         match self { Json::Object(_) => true, _ => false }
     }
 
-    pub fn object(&self) -> &Vec<KeyValue> {
-        match self {Json::Object(v) => v, _ => panic!("{:?} not string", self)}
+    pub fn object(self) -> Vec<KeyValue> {
+        match self {Json::Object(v) => v, _ => panic!("{:?} not object", self)}
     }
 
-    pub fn get_by_key(&self, key: KeyValue) -> Option<Json> {
-        let m = self.object();
-        match m.binary_search(&key) {
+    pub fn get_by_key(&self, key: &KeyValue) -> Option<Json> {
+        let m = match self {
+            Json::Object(v) => v,
+            _ => panic!("{:?} not object", self),
+        };
+        match m.binary_search(key) {
             Ok(i) => Some(m[i].1.clone()),
             Err(_) => None
         }
