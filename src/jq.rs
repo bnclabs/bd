@@ -308,8 +308,17 @@ impl Thunk {
     fn do_index_key(thunk: &mut Box<Thunk>, doc: Json, key: &String)
         -> Result<Vec<Json>>
     {
+        use json::{search_by_key, Json::{Object}};
+
         //println!("Thunk::IndexKey");
-        Ok(thunk(doc[key].clone())?)
+        let m = match doc { Object(m) => m, _ => return Ok(vec![Json::Null]) };
+        match search_by_key(&m, key) {
+            Ok(i) => {
+                let val = m.into_iter().nth(i).unwrap();
+                Ok(thunk(val.1)?)
+            },
+            Err(_) => Ok(vec![Json::Null]),
+        }
     }
 }
 

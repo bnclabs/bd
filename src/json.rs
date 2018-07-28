@@ -407,7 +407,7 @@ pub fn parse_object(text: &str, lex: &mut Lex)
         parse_whitespace(text, lex);
         let value = parse_value(text, lex)?;
 
-        let i = match Json::search_by_key(&map, &key) {Ok(i) => i, Err(i) => i};
+        let i = match search_by_key(&map, &key) {Ok(i) => i, Err(i) => i};
         //println!("parse {} {} {:?}", key, i, map);
         map.insert(i, KeyValue(key, value));
 
@@ -595,31 +595,6 @@ impl Json {
 
         text.push('"');
     }
-
-    fn search_by_key(obj: &Vec<KeyValue>, key: &str)
-        -> result::Result<usize, usize>
-    {
-        use std::cmp::Ordering::{Equal};
-
-        let mut size = obj.len();
-        if size == 0 {
-            return Err(0);
-        }
-
-        let mut base = 0usize;
-        while size > 1 {
-            let half = size / 2;
-            let mid = base + half;
-            // mid is always in [0, size), that means mid is >= 0 and < size.
-            // mid >= 0: by definition
-            // mid < size: mid = size / 2 + size / 4 + size / 8 ...
-            base = if key.cmp(&obj[mid].0) <= Equal { base } else { mid };
-            size -= half;
-        }
-        // base is always in [0, size) because base <= mid.
-        let cmp = key.cmp(&obj[base].0);
-        if cmp == Equal { Ok(base) } else {Err(base + (cmp>=Equal) as usize)}
-    }
 }
 
 impl<'a> Index<&'a str> for Json {
@@ -627,12 +602,38 @@ impl<'a> Index<&'a str> for Json {
 
     fn index(&self, key: &str) -> &Json {
         let m = match self { Json::Object(m) => m, _ => return &Json::Null };
-        match Json::search_by_key(&m, key) {
+        match search_by_key(&m, key) {
             Ok(i) => &m[i].1,
             Err(_) => &Json::Null,
         }
     }
 }
+
+pub fn search_by_key(obj: &Vec<KeyValue>, key: &str)
+    -> result::Result<usize, usize>
+{
+    use std::cmp::Ordering::{Equal};
+
+    let mut size = obj.len();
+    if size == 0 {
+        return Err(0);
+    }
+
+    let mut base = 0usize;
+    while size > 1 {
+        let half = size / 2;
+        let mid = base + half;
+        // mid is always in [0, size), that means mid is >= 0 and < size.
+        // mid >= 0: by definition
+        // mid < size: mid = size / 2 + size / 4 + size / 8 ...
+        base = if key.cmp(&obj[mid].0) <= Equal { base } else { mid };
+        size -= half;
+    }
+    // base is always in [0, size) because base <= mid.
+    let cmp = key.cmp(&obj[base].0);
+    if cmp == Equal { Ok(base) } else {Err(base + (cmp>=Equal) as usize)}
+}
+
 
 
 impl FromStr for Json {
