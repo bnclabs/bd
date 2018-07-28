@@ -124,7 +124,7 @@ fn as_token_key23(key: Token) -> Token {
 }
 
 fn token_to_thunk(tok: Token, thunk: Box<Thunk>) -> Box<Thunk> {
-    use self::Thunk::{Identity, Literal, MapGet};
+    use self::Thunk::{Identity, Literal, IndexKey};
 
     match tok {
         Token::Null => Box::new(Literal(Json::Null, thunk)),
@@ -135,7 +135,7 @@ fn token_to_thunk(tok: Token, thunk: Box<Thunk>) -> Box<Thunk> {
         Token::Array(val) => Box::new(Literal(Json::Array(val), thunk)),
         Token::Object(val) => Box::new(Literal(Json::Object(val), thunk)),
         Token::Dot => Box::new(Identity(thunk)),
-        Token::Key(key) => Box::new(MapGet(key, thunk)),
+        Token::Key(key) => Box::new(IndexKey(key, thunk)),
         Token::Empty => panic!("should have been handled earlier"),
     }
 }
@@ -275,7 +275,7 @@ pub enum Thunk {
     Empty,
     Identity(Box<Thunk>),
     Literal(Json, Box<Thunk>),
-    MapGet(String, Box<Thunk>),
+    IndexKey(String, Box<Thunk>),
     //TakeArray(Box<Thunk>, Vec<String>),
     //TakeMap(Box<Thunk>, Vec<String>),
 }
@@ -291,29 +291,25 @@ impl Thunk {
         Ok(vec![x])
     }
 
-    fn do_identity(thunk: &mut Box<Thunk>, x: Json)
+    fn do_identity(thunk: &mut Box<Thunk>, doc: Json)
         -> Result<Vec<Json>>
     {
         //println!("Thunk::Identity");
-        Ok(thunk(x)?)
+        Ok(thunk(doc)?)
     }
 
-    fn do_literal(thunk: &mut Box<Thunk>, _x: Json, val: &Json)
+    fn do_literal(thunk: &mut Box<Thunk>, _: Json, val: &Json)
         -> Result<Vec<Json>>
     {
         //println!("Thunk::Literal");
         Ok(thunk(val.clone())?)
     }
 
-    fn do_mapget(thunk: &mut Box<Thunk>, x: Json, key: &String)
+    fn do_index_key(thunk: &mut Box<Thunk>, doc: Json, key: &String)
         -> Result<Vec<Json>>
     {
-        //println!("Thunk::MapGet");
-        let kv = KeyValue(key.clone(), Json::Null); // TODO: avoid allocation.
-        match x.get_by_key(&kv) {
-            Some(val) => Ok(thunk(val)?),
-            None => Err(Error::Op(format!("missing key {}", key)))
-        }
+        //println!("Thunk::IndexKey");
+        Ok(thunk(doc[key].clone())?)
     }
 }
 
@@ -326,7 +322,7 @@ impl FnMut<(Json,)> for Thunk {
             Empty => Thunk::do_empty(args.0),
             Identity(thunk) => Thunk::do_identity(thunk, args.0),
             Literal(val, thunk) => Thunk::do_literal(thunk, args.0, val),
-            MapGet(key, thunk) => Thunk::do_mapget(thunk, args.0, key),
+            IndexKey(key, thunk) => Thunk::do_index_key(thunk, args.0, key),
         }
     }
 }
