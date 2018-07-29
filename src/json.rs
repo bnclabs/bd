@@ -12,7 +12,7 @@ include!("./json.rs.lookup");
 pub type Result<T> = result::Result<T,Error>;
 
 
-#[derive(Debug)]
+#[derive(Debug,Eq,PartialEq)]
 pub enum Error {
     Parse(String),
     Float(std::num::ParseFloatError, String),
@@ -612,7 +612,7 @@ impl<'a> Index<&'a str> for Json {
 pub fn search_by_key(obj: &Vec<KeyValue>, key: &str)
     -> result::Result<usize, usize>
 {
-    use std::cmp::Ordering::{Equal};
+    use std::cmp::Ordering::{Greater, Equal, Less};
 
     let mut size = obj.len();
     if size == 0 {
@@ -626,12 +626,14 @@ pub fn search_by_key(obj: &Vec<KeyValue>, key: &str)
         // mid is always in [0, size), that means mid is >= 0 and < size.
         // mid >= 0: by definition
         // mid < size: mid = size / 2 + size / 4 + size / 8 ...
-        base = if key.cmp(&obj[mid].0) <= Equal { base } else { mid };
+        let item: &str = &obj[mid].0;
+        base = if item.cmp(key) == Greater { base } else { mid };
         size -= half;
     }
     // base is always in [0, size) because base <= mid.
-    let cmp = key.cmp(&obj[base].0);
-    if cmp == Equal { Ok(base) } else {Err(base + (cmp>=Equal) as usize)}
+    let item: &str = &obj[base].0;
+    let cmp = item.cmp(key);
+    if cmp == Equal { Ok(base) } else { Err(base + (cmp == Less) as usize) }
 }
 
 
