@@ -46,6 +46,12 @@ impl From<u32> for Error {
     }
 }
 
+#[derive(Debug,Clone,PartialEq)]
+pub enum Output {
+    One(Json),
+    Many(Vec<Json>),
+}
+
 #[derive(Debug)]
 enum Token {
     Empty,
@@ -293,28 +299,28 @@ pub enum Thunk {
 impl Thunk {
 
     fn do_empty(x: Json)
-        -> Result<Vec<Json>>
+        -> Result<Output>
     {
         //println!("Thunk::Empty");
-        Ok(vec![x])
+        Ok(Output::One(x))
     }
 
     fn do_identity(thunk: &mut Box<Thunk>, doc: Json)
-        -> Result<Vec<Json>>
+        -> Result<Output>
     {
         //println!("Thunk::Identity");
         Ok(thunk(doc)?)
     }
 
     fn do_literal(thunk: &mut Box<Thunk>, _: Json, val: &Json)
-        -> Result<Vec<Json>>
+        -> Result<Output>
     {
         //println!("Thunk::Literal");
         Ok(thunk(val.clone())?)
     }
 
     fn do_index_key(thunk: &mut Box<Thunk>, doc: Json, key: &String, opt: bool)
-        -> Result<Vec<Json>>
+        -> Result<Output>
     {
         use json::{search_by_key, Json::{Object}};
 
@@ -326,12 +332,12 @@ impl Thunk {
                     Ok(thunk(val.1)?)
                 },
                 Err(_) => match opt {
-                    true => Ok(vec![Json::Null]),
+                    true => Ok(Output::One(Json::Null)),
                     false => Err(Error::Op(format!("missing key {}", key))),
                 }
             },
             _ => match opt {
-                true => Ok(vec![Json::Null]),
+                true => Ok(Output::One(Json::Null)),
                 false => Err(Error::Op(format!("not an object {:?}", doc))),
             }
         }
@@ -361,7 +367,7 @@ impl FnMut<(Json,)> for Thunk {
 }
 
 impl FnOnce<(Json,)> for Thunk {
-    type Output=Result<Vec<Json>>;
+    type Output=Result<Output>;
 
     extern "rust-call" fn call_once(mut self, args: (Json,)) -> Self::Output {
         self.call_mut(args)
@@ -380,8 +386,7 @@ mod test {
         match parse("").unwrap() {
             mut thunk @ box Thunk::Empty => {
                 let mut out = thunk(Json::String("hello".to_string())).unwrap();
-                assert_eq!(1, out.len());
-                assert_eq!("hello", out.remove(0).string());
+                assert_eq!(Output::One(Json::String("hello".to_string())), out);
             },
             _ => {
                 panic!("unexpected thunk")
@@ -394,8 +399,7 @@ mod test {
         match parse("   ").unwrap() {
             mut thunk @ box Thunk::Empty => {
                 let mut out = thunk(Json::String("hello".to_string())).unwrap();
-                assert_eq!(1, out.len());
-                assert_eq!("hello", out.remove(0).string());
+                assert_eq!(Output::One(Json::String("hello".to_string())), out);
             },
             _ => {
                 panic!("unexpected thunk")
@@ -408,8 +412,7 @@ mod test {
         let mut thunk = parse("null").unwrap();
         let doc = JsonBuf::parse_str("[10]").unwrap();
         let out = thunk(doc.clone()).unwrap();
-        assert_eq!(1, out.len());
-        assert_eq!(Json::Null, out[0])
+        assert_eq!(Output::One(Json::Null), out)
     }
 
     #[test]
@@ -417,8 +420,7 @@ mod test {
         let mut thunk = parse("true").unwrap();
         let doc = JsonBuf::parse_str("[10]").unwrap();
         let out = thunk(doc.clone()).unwrap();
-        assert_eq!(1, out.len());
-        assert_eq!(Json::Bool(true), out[0]);
+        assert_eq!(Output::One(Json::Bool(true)), out);
     }
 
     #[test]
@@ -426,8 +428,7 @@ mod test {
         let mut thunk = parse("false").unwrap();
         let doc = JsonBuf::parse_str("[10]").unwrap();
         let out = thunk(doc.clone()).unwrap();
-        assert_eq!(1, out.len());
-        assert_eq!(Json::Bool(false), out[0]);
+        assert_eq!(Output::One(Json::Bool(false)), out);
     }
 
     #[test]
@@ -435,8 +436,7 @@ mod test {
         let mut thunk = parse("12310231231").unwrap();
         let doc = JsonBuf::parse_str("[10]").unwrap();
         let out = thunk(doc.clone()).unwrap();
-        assert_eq!(1, out.len());
-        assert_eq!(Json::Integer(12310231231), out[0]);
+        assert_eq!(Output::One(Json::Integer(12310231231)), out);
     }
 
     #[test]
@@ -451,8 +451,7 @@ mod test {
         for tc in testcases {
             let mut thunk = parse(tc.0).unwrap();
             let out = thunk(doc.clone()).unwrap();
-            assert_eq!(1, out.len());
-            assert_eq!(Json::Float(tc.1), out[0]);
+            assert_eq!(Output::One(Json::Float(tc.1)), out);
         }
     }
 
@@ -461,8 +460,10 @@ mod test {
         let mut thunk = parse(r#""hello world""#).unwrap();
         let doc = JsonBuf::parse_str("[10]").unwrap();
         let out = thunk(doc.clone()).unwrap();
-        assert_eq!(1, out.len());
-        assert_eq!(Json::String("hello world".to_string()), out[0]);
+        assert_eq!(
+            Output::One(Json::String("hello world".to_string())),
+            out
+        );
     }
 
     #[test]
@@ -472,8 +473,7 @@ mod test {
         let doc = Json::Null;
         let mut thunk = parse(r#"[10]"#).unwrap();
         let out = thunk(doc.clone()).unwrap();
-        assert_eq!(1, out.len());
-        assert_eq!(Array(vec![Integer(10)]), out[0]);
+        assert_eq!(Output::One(Array(vec![Integer(10)])), out);
     }
 
     #[test]
@@ -483,30 +483,27 @@ mod test {
         let doc = Json::Null;
         let mut thunk = parse(r#"{"a": 10}"#).unwrap();
         assert_eq!(
-            Object(vec![KeyValue("a".to_string(), Integer(10))]),
-            thunk(doc.clone()).unwrap()[0]
+            Output::One(Object(vec![KeyValue("a".to_string(), Integer(10))])),
+            thunk(doc.clone()).unwrap()
         );
     }
 
     #[test]
     fn test_jq_key() {
         let doc = JsonBuf::parse_str(r#"{"a":[1,2],"b":[true,1]}"#).unwrap();
-        let refout = JsonBuf::parse_str("[true,1]").unwrap();
+        let refout = Output::One(JsonBuf::parse_str("[true,1]").unwrap());
 
         let mut thunk = parse(r#".b"#).unwrap();
         let res = thunk(doc.clone()).unwrap();
-        assert_eq!(res.len(), 1);
-        assert_eq!(refout, res[0]);
+        assert_eq!(refout, res);
 
         let mut thunk = parse(r#"."b""#).unwrap();
         let res = thunk(doc.clone()).unwrap();
-        assert_eq!(res.len(), 1);
-        assert_eq!(refout, res[0]);
+        assert_eq!(refout, res);
 
         let mut thunk = parse(r#".["b"]"#).unwrap();
         let res = thunk(doc.clone()).unwrap();
-        assert_eq!(res.len(), 1);
-        assert_eq!(refout, res[0]);
+        assert_eq!(refout, res);
     }
 
     #[test]
