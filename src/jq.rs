@@ -6,6 +6,10 @@ use json::{parse_string, parse_array, parse_object};
 use lex::Lex;
 use nom::{self, {types::CompleteStr as S}};
 
+include!("./nom.rs");
+//include!("./context.rs");
+include!("./jq_output.rs");
+
 pub type Result<T> = result::Result<T,Error>;
 
 
@@ -46,43 +50,12 @@ impl From<u32> for Error {
     }
 }
 
-#[derive(Debug,Clone,PartialEq)]
-pub enum Output {
-    One(Json),
-    Many(Vec<Json>),
-}
 
-#[derive(Debug)]
-enum Token {
-    Empty,
-    Null,
-    Bool(bool),
-    Integer(i128),
-    Float(f64),
-    String(String),
-    Array(Vec<Json>),
-    Object(Vec<KeyValue>),
-    Dot,
-    Key(String, bool),
-}
-
-
-pub fn parse(text: &str) -> Result<Box<Thunk>> {
-    let text = S(text);
-    let thunk = match parse_token(text)? {
-        (text, Token::Empty) if text.len() == 0 => Box::new(Thunk::Empty),
-        (_, Token::Empty) => panic!("impossible situation"),
-        (text, tok) => token_to_thunk(tok, parse(&text)?),
-    };
-    Ok(thunk)
-}
-
-fn parse_token(text: S) -> Result<(S, Token)> {
+pub fn parse_program(text: &str) -> Result<Box<Thunk>> {
     use nom::simple_errors::Context as NomContext;
 
-    //println!("parse_token {}", text);
-    match nom_jq_token(text) {
-        Ok((rem, token)) => Ok((rem, token)),
+    match nom_program(S(text)) {
+        Ok((_, thunk)) => Ok(Box::new(thunk)),
 
         Err(err @ nom::Err::Incomplete(_)) => {
             Err(Error::Parse(format!("{}", err)))
@@ -98,247 +71,138 @@ fn parse_token(text: S) -> Result<(S, Token)> {
     }
 }
 
-fn as_token_literal(text: S) -> Token {
-    use jq::Token::{Null, Bool};
-    match text.as_ref() {
-        "null" => Null,
-        "true" => Bool(true),
-        "false" => Bool(false),
-        _ => panic!("impossible case"),
-    }
-}
-
-fn as_token_integer(i: i128) -> Token {
-    Token::Integer(i)
-}
-
-fn as_token_float(f: f64) -> Token {
-    Token::Float(f)
-}
-
-fn as_token_key1((key, opt): (S, Option<S>)) -> Token {
-    //println!("as_token_key1 {:?} {:?}", key, opt);
-    Token::Key(key.to_string(), opt.map_or(false, |_| true))
-}
-
-fn as_token_key23((key, opt): (Token, Option<S>)) -> Token {
-    //println!("as_token_key23 {:?} {:?}", key, opt);
-    match key {
-        Token::String(key) => Token::Key(key, opt.map_or(false, |_| true)),
-        _ => panic!("impossible case")
-    }
-}
-
-fn token_to_thunk(tok: Token, thunk: Box<Thunk>) -> Box<Thunk> {
-    use self::Thunk::{Identity, Literal, IndexKey};
-
-    match tok {
-        Token::Null => Box::new(Literal(Json::Null, thunk)),
-        Token::Bool(val) => Box::new(Literal(Json::Bool(val), thunk)),
-        Token::Integer(val) => Box::new(Literal(Json::Integer(val), thunk)),
-        Token::Float(val) => Box::new(Literal(Json::Float(val), thunk)),
-        Token::String(val) => Box::new(Literal(Json::String(val), thunk)),
-        Token::Array(val) => Box::new(Literal(Json::Array(val), thunk)),
-        Token::Object(val) => Box::new(Literal(Json::Object(val), thunk)),
-        Token::Dot => Box::new(Identity(thunk)),
-        Token::Key(key, opt) => Box::new(IndexKey(key, opt, thunk)),
-        Token::Empty => panic!("should have been handled earlier"),
-    }
-}
-
-
-named!(nom_jq_null(S) -> S, tag!("null"));
-named!(nom_jq_true(S) -> S, tag!("true"));
-named!(nom_jq_false(S) -> S, tag!("false"));
-named!(nom_jq_int(S) -> i128,
-    flat_map!(re_match!(r#"^[+-]?\d+"#), parse_to!(i128))
-);
-named!(nom_jq_float(S) -> f64,
-    flat_map!(
-        re_match!(r#"^[-+]?[0-9]*\.?[0-9]+([eE][-+]?[0-9]+)?"#),
-        parse_to!(f64)
-    )
-);
-fn nom_json_string(text: S) -> nom::IResult<S, Token> {
-    //println!("nom_json_string {}", text);
-    check_next_byte(text, b'"')?;
-    let mut lex = Lex::new(0, 1, 1);
-    match parse_string(&text, &mut lex) {
-        Ok(Json::String(s)) => {
-            Ok((S(&text[lex.off..]), Token::String(s)))
-        },
-
-        _ => {
-            let kind = nom::ErrorKind::Custom(lex.off as u32);
-            return Err(nom::Err::Failure(nom::Context::Code(text, kind)));
-        }
-    }
-}
-fn nom_json_array(text: S) -> nom::IResult<S, Token> {
-    check_next_byte(text, b'[')?;
-    let mut lex = Lex::new(0, 1, 1);
-    match parse_array(&text, &mut lex) {
-        Ok(Json::Array(arr)) => {
-            Ok((S(&text[lex.off..]), Token::Array(arr)))
-        },
-
-        _ => {
-            let kind = nom::ErrorKind::Custom(lex.off as u32);
-            return Err(nom::Err::Failure(nom::Context::Code(text, kind)));
-        }
-    }
-}
-fn nom_json_object(text: S) -> nom::IResult<S, Token> {
-    check_next_byte(text, b'{')?;
-    let mut lex = Lex::new(0, 1, 1);
-    match parse_object(&text, &mut lex) {
-        Ok(Json::Object(obj)) => {
-            Ok((S(&text[lex.off..]), Token::Object(obj)))
-        },
-
-        _ => {
-            let kind = nom::ErrorKind::Custom(lex.off as u32);
-            return Err(nom::Err::Failure(nom::Context::Code(text, kind)));
-        }
-    }
-}
-named!(nom_jq_literal<S, Token>,
-    ws!(alt!(
-        nom_jq_null  => { as_token_literal } |
-        nom_jq_true  => { as_token_literal } |
-        nom_jq_false => { as_token_literal } |
-        nom_jq_int   => { as_token_integer } |
-        nom_jq_float => { as_token_float } |
-        nom_json_string |
-        nom_json_array |
-        nom_json_object
-    ))
-);
-
-
-named!(nom_jq_key1(S) -> (S, Option<S>), // like .key
-    do_parse!(
-             nom_jq_dot      >>
-        key: re_match!(r#"^[a-zA-Z0-9_]+"#) >>
-        opt: opt!(tag!("?")) >>
-        (key, opt)
-    )
-);
-named!(nom_jq_key2(S) -> (Token, Option<S>), // like ."key"
-    do_parse!(
-             nom_jq_dot      >>
-        key: nom_json_string >>
-        opt: opt!(tag!("?")) >>
-        (key, opt)
-    )
-);
-named!(nom_jq_key3(S) -> (Token, Option<S>), // like .["key"]
-    do_parse!(
-             nom_jq_dot      >>
-             tag!("[")       >>
-        key: nom_json_string >>
-             tag!("]")       >>
-        opt: opt!(tag!("?")) >>
-        (key, opt)
-    )
-);
-named!(nom_jq_key<S, Token>,
-    ws!(alt!(
-        nom_jq_key1 => { as_token_key1 } |
-        nom_jq_key2 => { as_token_key23 } |
-        nom_jq_key3 => { as_token_key23 }
-    ))
-);
-
-
-named!(nom_jq_dot(S) -> S, tag!("."));
-fn nom_jq_empty(text: S) -> nom::IResult<S, Token> {
-    //println!("nom_jq_empty");
-    if text.len() == 0 {
-        Ok((S(&text[..]), Token::Empty))
-    } else {
-        panic!("impossible situation")
-    }
-}
-named!(nom_jq_token<S, Token>,
-    ws!(alt!(
-        nom_jq_literal |
-        nom_jq_key |
-        // identity
-        nom_jq_dot => { |_| Token::Dot } |
-        // catch all
-        nom_jq_empty // should alway be last.
-    ))
-);
-
-fn check_next_byte(text: S, b: u8) -> nom::IResult<S, ()> {
-    let progbs = text.as_bytes();
-    if progbs.len() == 0 {
-        let ctxt = nom::Context::Code(text, nom::ErrorKind::Custom(0));
-        return Err(nom::Err::Error(ctxt))
-
-    } else if progbs[0] != b {
-        let ctxt = nom::Context::Code(text, nom::ErrorKind::Custom(0));
-        return Err(nom::Err::Error(ctxt))
-    }
-    Ok((text, ()))
-}
-
-
-
 #[derive(Debug)]
 pub enum Thunk {
+    // Primary thunks
     Empty,
-    Identity(Box<Thunk>),
-    Literal(Json, Box<Thunk>),
-    IndexKey(String, bool, Box<Thunk>),
-    //TakeArray(Box<Thunk>, Vec<String>),
-    //TakeMap(Box<Thunk>, Vec<String>),
+    Identity,
+    Literal(Json),
+    IndexShortcut(String, Option<usize>, bool),
+    Slice(Box<Thunk>, usize, usize, bool),
+    Iterate(Box<Thunk>, Box<Thunk>, bool),
+    Collection(Box<Thunk>, bool),
+    Neg(Box<Thunk>),
+    Not(Box<Thunk>),
+    // Operations in increasing precedance
+    Pipe(Box<Thunk>, Box<Thunk>),
+    Or(Box<Thunk>, Box<Thunk>),
+    And(Box<Thunk>, Box<Thunk>),
+    Compare(Box<Thunk>, Box<Thunk>),
+    BitOr(Box<Thunk>, Box<Thunk>),
+    BitXor(Box<Thunk>, Box<Thunk>),
+    BitAnd(Box<Thunk>, Box<Thunk>),
+    Shr(Box<Thunk>, Box<Thunk>),
+    Shl(Box<Thunk>, Box<Thunk>),
+    Add(Box<Thunk>, Box<Thunk>),
+    Sub(Box<Thunk>, Box<Thunk>),
+    Mult(Box<Thunk>, Box<Thunk>),
+    Div(Box<Thunk>, Box<Thunk>),
+    Rem(Box<Thunk>, Box<Thunk>),
+    // Program type
+    List(Vec<Thunk>),
 }
 
 impl Thunk {
-
-    fn do_empty(x: Json)
+    fn do_empty(doc: Json)
         -> Result<Output>
     {
         //println!("Thunk::Empty");
-        Ok(Output::One(x))
+        Ok(Output::One(doc))
     }
 
-    fn do_identity(thunk: &mut Box<Thunk>, doc: Json)
+    fn do_identity(doc: Json)
         -> Result<Output>
     {
         //println!("Thunk::Identity");
-        Ok(thunk(doc)?)
+        Ok(Output::One(doc))
     }
 
-    fn do_literal(thunk: &mut Box<Thunk>, _: Json, val: &Json)
+    fn do_literal(literal: &Json, _: Json)
         -> Result<Output>
     {
         //println!("Thunk::Literal");
-        Ok(thunk(val.clone())?)
+        Ok(Output::One(literal.clone()))
     }
 
-    fn do_index_key(thunk: &mut Box<Thunk>, doc: Json, key: &String, opt: bool)
+    fn do_index_shortcut(key: &String, off: Option<usize>, opt: bool, doc: Json)
         -> Result<Output>
     {
-        use json::{search_by_key, Json::{Object}};
+        use json::Json::{Object, Array};
 
         //println!("Thunk::IndexKey {:?} {}", doc, key);
         match doc {
-            Object(m) => match search_by_key(&m, key) {
-                Ok(i) => {
-                    let val = m.into_iter().nth(i).unwrap();
-                    Ok(thunk(val.1)?)
-                },
-                Err(_) => match opt {
-                    true => Ok(Output::One(Json::Null)),
-                    false => Err(Error::Op(format!("missing key {}", key))),
-                }
-            },
+            Array(a) => Thunk::index_array(a, &key, off, opt),
+            Object(m) => Thunk::index_object(m, &key, opt),
             _ => match opt {
                 true => Ok(Output::One(Json::Null)),
                 false => Err(Error::Op(format!("not an object {:?}", doc))),
+            }
+        }
+    }
+
+    fn do_slice(
+        thunk: &mut Thunk, start: usize, end: usize, opt: bool, doc: Json)
+        -> Result<Output>
+    {
+        match (opt, thunk(doc)?.slice(start, end)) {
+            (true, Err(_)) => Ok(Output::One(Json::Null)),
+            (_, res) => res,
+        }
+    }
+
+    fn do_iterate(
+        _thunk: &mut Thunk, _thunks: &mut Thunk, _opt: bool, _doc: Json)
+        -> Result<Output>
+    {
+        unimplemented!()
+    }
+
+    fn do_collection(_thunks: &mut Thunk, _opt: bool, _doc: Json)
+        -> Result<Output>
+    {
+        unimplemented!()
+    }
+
+    fn do_pipe(_lhs_thunk: &mut Thunk, _rhs_thunk: &mut Thunk, _doc: Json)
+        -> Result<Output>
+    {
+        unimplemented!()
+    }
+
+    fn index_array(a: Vec<Json>, key: &str, off: Option<usize>, opt: bool)
+        -> Result<Output>
+    {
+        match (off, opt) {
+            (None, true) => {
+                Ok(Output::One(Json::Null))
+            },
+            (None, false) => {
+                Err(Error::Op(format!("not an array index {}", key)))
+            },
+            (Some(off), true) if off >= a.len() => {
+                Ok(Output::One(Json::Null))
+            },
+            (Some(off), false) if off >= a.len() => {
+                Err(Error::Op(format!("offset {} out of bound", off)))
+            },
+            (Some(off), _) => {
+                Ok(Output::One(a.into_iter().nth(off).unwrap()))
+            },
+        }
+    }
+
+    fn index_object(m: Vec<KeyValue>, key: &str, opt: bool)
+        -> Result<Output>
+    {
+        use json::search_by_key;
+
+        match search_by_key(&m, key) {
+            Ok(i) => {
+                Ok(Output::One(m.into_iter().nth(i).unwrap().1))
+            },
+            Err(_) => match opt {
+                true => Ok(Output::One(Json::Null)),
+                false => Err(Error::Op(format!("missing key {}", key))),
             }
         }
     }
@@ -349,19 +213,33 @@ impl FnMut<(Json,)> for Thunk {
     extern "rust-call" fn call_mut(&mut self, args: (Json,)) -> Self::Output {
         use jq::Thunk::*;
 
+        let doc = args.0;
         match self {
             Empty => {
-                Thunk::do_empty(args.0)
+                Thunk::do_empty(doc)
             },
-            Identity(thunk) => {
-                Thunk::do_identity(thunk, args.0)
-            }
-            Literal(val, thunk) => {
-                Thunk::do_literal(thunk, args.0, val)
-            }
-            IndexKey(key, opt, thunk) => {
-                Thunk::do_index_key(thunk, args.0, key, *opt)
-            }
+            Identity => {
+                Thunk::do_identity(doc)
+            },
+            Literal(literal) => {
+                Thunk::do_literal(literal, doc)
+            },
+            IndexShortcut(key, off, opt) => {
+                Thunk::do_index_shortcut(key, *off, *opt, doc)
+            },
+            Slice(ref mut thunk, start, end, opt) => {
+                Thunk::do_slice(thunk, *start, *end, *opt, doc)
+            },
+            Iterate(ref mut thunk, ref mut thunks, opt) => {
+                Thunk::do_iterate(thunk, thunks, *opt, doc)
+            },
+            Collection(ref mut thunks, opt) => {
+                Thunk::do_collection(thunks, *opt, doc)
+            },
+            Pipe(ref mut lhs_thunk, ref mut rhs_thunk) => {
+                Thunk::do_pipe(lhs_thunk, rhs_thunk, doc)
+            },
+            _ => unimplemented!(),
         }
     }
 }
@@ -408,7 +286,7 @@ mod test {
     }
 
     #[test]
-    fn test_jq_null() {
+    fn test_expr_null() {
         let mut thunk = parse("null").unwrap();
         let doc = JsonBuf::parse_str("[10]").unwrap();
         let out = thunk(doc.clone()).unwrap();
@@ -416,7 +294,7 @@ mod test {
     }
 
     #[test]
-    fn test_jq_true() {
+    fn test_expr_true() {
         let mut thunk = parse("true").unwrap();
         let doc = JsonBuf::parse_str("[10]").unwrap();
         let out = thunk(doc.clone()).unwrap();
@@ -424,7 +302,7 @@ mod test {
     }
 
     #[test]
-    fn test_jq_false() {
+    fn test_expr_false() {
         let mut thunk = parse("false").unwrap();
         let doc = JsonBuf::parse_str("[10]").unwrap();
         let out = thunk(doc.clone()).unwrap();
@@ -432,7 +310,7 @@ mod test {
     }
 
     #[test]
-    fn test_jq_int() {
+    fn test_expr_int() {
         let mut thunk = parse("12310231231").unwrap();
         let doc = JsonBuf::parse_str("[10]").unwrap();
         let out = thunk(doc.clone()).unwrap();
@@ -440,7 +318,7 @@ mod test {
     }
 
     #[test]
-    fn test_jq_float() {
+    fn test_expr_float() {
         let doc = JsonBuf::parse_str("[10]").unwrap();
         let testcases = vec![
             ("1.2", 1.2), ("0.2", 0.2), ("1.0", 1.0), ("0.0", 0.0),
@@ -456,7 +334,7 @@ mod test {
     }
 
     #[test]
-    fn test_jq_string() {
+    fn test_expr_string() {
         let mut thunk = parse(r#""hello world""#).unwrap();
         let doc = JsonBuf::parse_str("[10]").unwrap();
         let out = thunk(doc.clone()).unwrap();
@@ -467,7 +345,7 @@ mod test {
     }
 
     #[test]
-    fn test_jq_array() {
+    fn test_expr_array() {
         use self::Json::{Array, Integer};
 
         let doc = Json::Null;
@@ -477,7 +355,7 @@ mod test {
     }
 
     #[test]
-    fn test_jq_object() {
+    fn test_expr_object() {
         use self::Json::{Object, Integer};
 
         let doc = Json::Null;
@@ -489,7 +367,7 @@ mod test {
     }
 
     #[test]
-    fn test_jq_key() {
+    fn test_expr_object_index() {
         let doc = JsonBuf::parse_str(r#"{"a":[1,2],"b":[true,1]}"#).unwrap();
         let refout = Output::One(JsonBuf::parse_str("[true,1]").unwrap());
 
@@ -507,7 +385,7 @@ mod test {
     }
 
     #[test]
-    fn test_jq_key_opt() {
+    fn test_expr_object_index_opt() {
         let doc1 = JsonBuf::parse_str(r#"{"a":[1,2],"b":[true,1]}"#).unwrap();
         let doc2 = JsonBuf::parse_str(r#"null"#).unwrap();
 

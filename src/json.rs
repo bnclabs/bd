@@ -504,6 +504,7 @@ pub enum Json {
 impl Json {
     pub fn to_json(&self, text: &mut String) {
         use json::Json::{Null, Bool, Integer, Float, Array, Object};
+
         match self {
             Null => text.push_str("null"),
             Bool(true) => text.push_str("true"),
@@ -573,6 +574,15 @@ impl Json {
 
     pub fn object(self) -> Vec<KeyValue> {
         match self {Json::Object(v) => v, _ => panic!("{:?} not object", self)}
+    }
+
+    pub fn slice(self, start: usize, end: usize) -> Option<Json> {
+        use json::Json::Array;
+
+        match self {
+            Array(a) => Some(Array((&a[start..end]).to_vec())),
+            _ => None,
+        }
     }
 
     fn encode_string(val: &str, text: &mut String) {
