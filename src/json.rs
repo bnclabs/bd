@@ -619,6 +619,23 @@ impl<'a> Index<&'a str> for Json {
     }
 }
 
+impl FromStr for Json {
+    type Err=Error;
+
+    fn from_str(s: &str) -> Result<Json> {
+        JsonBuf::parse_str(s)
+    }
+}
+
+impl fmt::Display for Json {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        let mut s = String::new();
+        self.to_json(&mut s);
+        write!(f, "{}", s)
+    }
+}
+
+
 pub fn search_by_key(obj: &Vec<KeyValue>, key: &str)
     -> result::Result<usize, usize>
 {
@@ -647,14 +664,6 @@ pub fn search_by_key(obj: &Vec<KeyValue>, key: &str)
 }
 
 
-
-impl FromStr for Json {
-    type Err=Error;
-
-    fn from_str(s: &str) -> Result<Json> {
-        JsonBuf::parse_str(s)
-    }
-}
 
 #[cfg(test)]
 mod tests {
@@ -709,21 +718,13 @@ mod tests {
         obj.insert(7, kv);
         refs[refs_len - n] = Object(obj);
 
-        //for (i, json) in jsons.iter().enumerate() {
-        //    jsonbuf.set(json);
-        //    let value = jsonbuf.parse().unwrap();
-        //    //println!("{} {:?}", i, value);
-        //    assert_eq!(value, refs[i], "testcase: {}", i);
-        //}
         jsonbuf.set(jsons[51]);
         let value = jsonbuf.parse().unwrap();
         assert_eq!(value, refs[51]);
 
         let ref_jsons = include!("../testdata/test_simple.jsons.ref.jsons");
-        let mut s = string::String::new();
         for (i, r) in refs.iter().enumerate() {
-            s.clear();
-            r.to_json(&mut s);
+            let s = format!("{}", r);
             //println!("{} {}", i, &s);
             assert_eq!(&s, ref_jsons[i], "testcase: {}", i);
         }

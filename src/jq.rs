@@ -156,8 +156,8 @@ fn do_index_shortcut(key: &String, off: Option<usize>, opt: bool, doc: Json)
 
     //println!("Thunk::IndexKey {:?} {}", doc, key);
     match doc {
-        Array(a) => Thunk::index_array(a, &key, off, opt),
-        Object(m) => Thunk::index_object(m, &key, opt),
+        Array(a) => index_array(a, &key, off, opt),
+        Object(m) => index_object(m, &key, opt),
         _ => match opt {
             true => Ok(Output::One(Json::Null)),
             false => Err(Error::Op(format!("not an object {:?}", doc))),
