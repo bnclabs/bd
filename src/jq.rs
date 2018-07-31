@@ -76,11 +76,14 @@ pub enum Thunk {
     // Primary thunks
     Empty,
     Identity,
+    Recurse,
     Literal(Json),
+    Identifier(String),
     IndexShortcut(String, Option<usize>, bool),
     Slice(Box<Thunk>, usize, usize, bool),
     Iterate(Box<Thunk>, Box<Thunk>, bool),
-    Collection(Box<Thunk>, bool),
+    List(Box<Thunk>, bool),
+    Dict(Box<Thunk>, bool),
     Neg(Box<Thunk>),
     Not(Box<Thunk>),
     // Operations in increasing precedance
@@ -99,7 +102,7 @@ pub enum Thunk {
     Div(Box<Thunk>, Box<Thunk>),
     Rem(Box<Thunk>, Box<Thunk>),
     // Program type
-    List(Vec<Thunk>),
+    Programs(Vec<Thunk>),
 }
 
 impl Thunk {
@@ -157,7 +160,7 @@ impl Thunk {
         unimplemented!()
     }
 
-    fn do_collection(_thunks: &mut Thunk, _opt: bool, _doc: Json)
+    fn do_list(_thunks: &mut Thunk, _opt: bool, _doc: Json)
         -> Result<Output>
     {
         unimplemented!()
@@ -233,8 +236,8 @@ impl FnMut<(Json,)> for Thunk {
             Iterate(ref mut thunk, ref mut thunks, opt) => {
                 Thunk::do_iterate(thunk, thunks, *opt, doc)
             },
-            Collection(ref mut thunks, opt) => {
-                Thunk::do_collection(thunks, *opt, doc)
+            List(ref mut thunks, opt) => {
+                Thunk::do_list(thunks, *opt, doc)
             },
             Pipe(ref mut lhs_thunk, ref mut rhs_thunk) => {
                 Thunk::do_pipe(lhs_thunk, rhs_thunk, doc)

@@ -1,8 +1,11 @@
 named!(nom_dot(S) -> S, tag!("."));
+named!(nom_dotdot(S) -> S, tag!(".."));
 named!(nom_colon(S) -> S, tag!(":"));
 named!(nom_comma(S) -> S, tag!(","));
 named!(nom_open_sqr(S) -> S, tag!("["));
 named!(nom_clos_sqr(S) -> S, tag!("]"));
+named!(nom_open_brace(S) -> S, tag!("{"));
+named!(nom_clos_brace(S) -> S, tag!("}"));
 named!(nom_open_paran(S) -> S, tag!(")"));
 named!(nom_clos_paran(S) -> S, tag!(")"));
 named!(nom_opt(S) -> Option<S>, opt!(tag!("?")));
@@ -89,6 +92,7 @@ fn nom_object(text: S) -> nom::IResult<S, Json> {
 //                | nom_dot
 //                | '-' Primary
 //                | '!' Primary
+//                | <and many more can be added>
 
 named!(nom_expr(S) -> Thunk,
     map!(
@@ -384,11 +388,20 @@ named!(nom_primary_iterate(S) -> (Thunk, Thunk, Option<S>),
         (thunk, thunks, opt)
     )
 );
-named!(nom_primary_collection(S) -> (Thunk, Option<S>),
+named!(nom_primary_collection1(S) -> (Thunk, Option<S>),
     do_parse!(
                 nom_open_sqr  >>
         thunks: nom_expr_list >>
                 nom_clos_sqr  >>
+           opt: nom_opt       >>
+        (thunks, opt)
+    )
+);
+named!(nom_primary_collection2(S) -> (Thunk, Option<S>),
+    do_parse!(
+                nom_open_brace  >>
+        thunks: nom_expr_list >>
+                nom_clos_brace  >>
            opt: nom_opt       >>
         (thunks, opt)
     )
@@ -432,14 +445,17 @@ named!(nom_primary_literal(S) -> Thunk,
 
 named!(nom_primary_expr(S) -> Thunk,
     alt!(
-        nom_primary_literal |
+        nom_primary_literal | // should come before identifier
+        nom_identifier => { |s: S| Thunk::Identifier(s.to_string()) } |
         nom_primary_slice => { slice_to_expr } |
         nom_primary_iterate => { iterate_to_expr } |
-        nom_primary_collection => { collection_to_expr } |
+        nom_primary_collection1 => { collection1_to_expr } |
+        nom_primary_collection2 => { collection2_to_expr } |
         nom_primary_index_short => { index_short_to_expr } |
         nom_primary_unarynot_expr => { |thunk| Thunk::Not(Box::new(thunk)) } |
         nom_primary_unaryneg_expr => { |thunk| Thunk::Neg(Box::new(thunk)) } |
         nom_primary_paran_expr |
+        nom_dotdot => { |_| Thunk::Recurse } |
         nom_dot => { |_| Thunk::Identity }
     )
 );
@@ -463,7 +479,7 @@ named!(nom_expr_list(S) -> Thunk,
                 Some(mut thunks) => { thunks.insert(0, thunk); thunks },
                 None => vec![thunk]
             };
-            Thunk::List(thunks)
+            Thunk::Programs(thunks)
         }
     )
 );
@@ -508,8 +524,12 @@ fn iterate_to_expr((thunk, thunks, opt): (Thunk, Thunk, Option<S>))
     )
 }
 
-fn collection_to_expr((thunks, opt): (Thunk, Option<S>)) -> Thunk {
-    Thunk::Collection(Box::new(thunks), opt.map_or(false, |_| true))
+fn collection1_to_expr((thunks, opt): (Thunk, Option<S>)) -> Thunk {
+    Thunk::List(Box::new(thunks), opt.map_or(false, |_| true))
+}
+
+fn collection2_to_expr((thunks, opt): (Thunk, Option<S>)) -> Thunk {
+    Thunk::Dict(Box::new(thunks), opt.map_or(false, |_| true))
 }
 
 
