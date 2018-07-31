@@ -6,8 +6,8 @@ use json::{parse_string, parse_array, parse_object};
 use lex::Lex;
 use nom::{self, {types::CompleteStr as S}};
 
-include!("./nom.rs");
-//include!("./context.rs");
+include!("./jq_nom.rs");
+//include!("./jq_context.rs");
 include!("./jq_output.rs");
 
 pub type Result<T> = result::Result<T,Error>;
@@ -101,8 +101,10 @@ pub enum Thunk {
     Mult(Box<Thunk>, Box<Thunk>),
     Div(Box<Thunk>, Box<Thunk>),
     Rem(Box<Thunk>, Box<Thunk>),
-    // Program type
-    Programs(Vec<Thunk>),
+    // Builtins
+    Builtin(String, Box<Thunk>),
+    // comman separated list of expression thunks
+    Thunks(Vec<Thunk>),
 }
 
 impl Thunk {

@@ -442,16 +442,26 @@ named!(nom_primary_literal(S) -> Thunk,
         nom_object => { |o| Thunk::Literal(o) }
     )
 );
+named!(nom_primary_builtins(S) -> (S, Thunk),
+    do_parse!(
+        funcname: nom_identifier >>
+                  nom_open_paran >>
+            args: nom_expr_list  >>
+                  nom_clos_paran >>
+        (funcname, args)
+    )
+);
 
 named!(nom_primary_expr(S) -> Thunk,
     alt!(
         nom_primary_literal | // should come before identifier
+        nom_primary_builtins => { builtin_to_thunk } |
         nom_identifier => { |s: S| Thunk::Identifier(s.to_string()) } |
-        nom_primary_slice => { slice_to_expr } |
-        nom_primary_iterate => { iterate_to_expr } |
-        nom_primary_collection1 => { collection1_to_expr } |
-        nom_primary_collection2 => { collection2_to_expr } |
-        nom_primary_index_short => { index_short_to_expr } |
+        nom_primary_slice => { slice_to_thunk } |
+        nom_primary_iterate => { iterate_to_thunk } |
+        nom_primary_collection1 => { collection1_to_thunk } |
+        nom_primary_collection2 => { collection2_to_thunk } |
+        nom_primary_index_short => { index_short_to_thunk } |
         nom_primary_unarynot_expr => { |thunk| Thunk::Not(Box::new(thunk)) } |
         nom_primary_unaryneg_expr => { |thunk| Thunk::Neg(Box::new(thunk)) } |
         nom_primary_paran_expr |
@@ -479,7 +489,7 @@ named!(nom_expr_list(S) -> Thunk,
                 Some(mut thunks) => { thunks.insert(0, thunk); thunks },
                 None => vec![thunk]
             };
-            Thunk::Programs(thunks)
+            Thunk::Thunks(thunks)
         }
     )
 );
@@ -501,7 +511,11 @@ named!(nom_program(S) -> Thunk,
 );
 
 
-fn index_short_to_expr((key, opt): (Json, Option<S>)) -> Thunk {
+fn builtin_to_thunk((funcname, args): (S, Thunk)) -> Thunk {
+    Thunk::Builtin(funcname.to_string(), Box::new(args))
+}
+
+fn index_short_to_thunk((key, opt): (Json, Option<S>)) -> Thunk {
     let key = match key {Json::String(s) => s, _ => panic!("impossible case")};
     let off: Option<usize> = match key.parse() {
         Ok(off) => Some(off),
@@ -510,13 +524,13 @@ fn index_short_to_expr((key, opt): (Json, Option<S>)) -> Thunk {
     Thunk::IndexShortcut(key, off, opt.map_or(false, |_| true))
 }
 
-fn slice_to_expr((thunk, start, end, opt): (Thunk, usize, usize, Option<S>))
+fn slice_to_thunk((thunk, start, end, opt): (Thunk, usize, usize, Option<S>))
     -> Thunk
 {
     Thunk::Slice(Box::new(thunk), start, end, opt.map_or(false, |_| true))
 }
 
-fn iterate_to_expr((thunk, thunks, opt): (Thunk, Thunk, Option<S>))
+fn iterate_to_thunk((thunk, thunks, opt): (Thunk, Thunk, Option<S>))
     -> Thunk
 {
     Thunk::Iterate(
@@ -524,11 +538,11 @@ fn iterate_to_expr((thunk, thunks, opt): (Thunk, Thunk, Option<S>))
     )
 }
 
-fn collection1_to_expr((thunks, opt): (Thunk, Option<S>)) -> Thunk {
+fn collection1_to_thunk((thunks, opt): (Thunk, Option<S>)) -> Thunk {
     Thunk::List(Box::new(thunks), opt.map_or(false, |_| true))
 }
 
-fn collection2_to_expr((thunks, opt): (Thunk, Option<S>)) -> Thunk {
+fn collection2_to_thunk((thunks, opt): (Thunk, Option<S>)) -> Thunk {
     Thunk::Dict(Box::new(thunks), opt.map_or(false, |_| true))
 }
 
