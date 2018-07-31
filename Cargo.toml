@@ -1,5 +1,5 @@
 [package]
-name = "rdata"
+name = "db.rs"
 version = "0.1.0"
 authors = ["prataprc <prataprc@gmail.com>"]
 
