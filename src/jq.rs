@@ -10,6 +10,7 @@ include!("./jq_nom.rs");
 //include!("./jq_context.rs");
 include!("./jq_output.rs");
 
+
 pub type Result<T> = result::Result<T,Error>;
 
 
@@ -101,116 +102,9 @@ pub enum Thunk {
     Rem(Box<Thunk>, Box<Thunk>),
     // Builtins
     Builtin(String, Box<Thunk>),
-    // comman separated list of expression thunks
+    // comma separated list of expression thunks
     Thunks(Vec<Thunk>),
 }
-
-impl Thunk {
-    fn do_empty(doc: Json)
-        -> Result<Output>
-    {
-        //println!("Thunk::Empty");
-        Ok(Output::One(doc))
-    }
-
-    fn do_identity(doc: Json)
-        -> Result<Output>
-    {
-        //println!("Thunk::Identity");
-        Ok(Output::One(doc))
-    }
-
-    fn do_literal(literal: &Json, _: Json)
-        -> Result<Output>
-    {
-        //println!("Thunk::Literal");
-        Ok(Output::One(literal.clone()))
-    }
-
-    fn do_index_shortcut(key: &String, off: Option<usize>, opt: bool, doc: Json)
-        -> Result<Output>
-    {
-        use json::Json::{Object, Array};
-
-        //println!("Thunk::IndexKey {:?} {}", doc, key);
-        match doc {
-            Array(a) => Thunk::index_array(a, &key, off, opt),
-            Object(m) => Thunk::index_object(m, &key, opt),
-            _ => match opt {
-                true => Ok(Output::One(Json::Null)),
-                false => Err(Error::Op(format!("not an object {:?}", doc))),
-            }
-        }
-    }
-
-    fn do_slice(
-        thunk: &mut Thunk, start: usize, end: usize, opt: bool, doc: Json)
-        -> Result<Output>
-    {
-        match (opt, thunk(doc)?.slice(start, end)) {
-            (true, Err(_)) => Ok(Output::One(Json::Null)),
-            (_, res) => res,
-        }
-    }
-
-    fn do_iterate(
-        _thunk: &mut Thunk, _thunks: &mut Thunk, _opt: bool, _doc: Json)
-        -> Result<Output>
-    {
-        unimplemented!()
-    }
-
-    fn do_list(_thunks: &mut Thunk, _opt: bool, _doc: Json)
-        -> Result<Output>
-    {
-        unimplemented!()
-    }
-
-    fn do_pipe(_lhs_thunk: &mut Thunk, _rhs_thunk: &mut Thunk, _doc: Json)
-        -> Result<Output>
-    {
-        unimplemented!()
-    }
-
-    fn index_array(a: Vec<Json>, key: &str, off: Option<usize>, opt: bool)
-        -> Result<Output>
-    {
-        match (off, opt) {
-            (None, true) => {
-                Ok(Output::One(Json::Null))
-            },
-            (None, false) => {
-                Err(Error::Op(format!("not an array index {}", key)))
-            },
-            (Some(off), true) if off >= a.len() => {
-                Ok(Output::One(Json::Null))
-            },
-            (Some(off), false) if off >= a.len() => {
-                Err(Error::Op(format!("offset {} out of bound", off)))
-            },
-            (Some(off), _) => {
-                Ok(Output::One(a.into_iter().nth(off).unwrap()))
-            },
-        }
-    }
-
-    fn index_object(m: Vec<KeyValue>, key: &str, opt: bool)
-        -> Result<Output>
-    {
-        use json::search_by_key;
-
-        match search_by_key(&m, key) {
-            Ok(i) => {
-                Ok(Output::One(m.into_iter().nth(i).unwrap().1))
-            },
-            Err(_) => match opt {
-                true => Ok(Output::One(Json::Null)),
-                false => Err(Error::Op(format!("missing key {}", key))),
-            }
-        }
-    }
-}
-
 
 impl FnMut<(Json,)> for Thunk {
     extern "rust-call" fn call_mut(&mut self, args: (Json,)) -> Self::Output {
@@ -218,30 +112,30 @@ impl FnMut<(Json,)> for Thunk {
 
         let doc = args.0;
         match self {
-            Empty => {
-                Thunk::do_empty(doc)
-            },
-            Identity => {
-                Thunk::do_identity(doc)
-            },
-            Literal(literal) => {
-                Thunk::do_literal(literal, doc)
-            },
+            Empty => Ok(Output::One(doc)),
+            Identity => Ok(Output::One(doc)),
+            Literal(literal) => Ok(Output::One(literal.clone())),
+
             IndexShortcut(key, off, opt) => {
-                Thunk::do_index_shortcut(key, *off, *opt, doc)
+                do_index_shortcut(key, *off, *opt, doc)
             },
+
             Slice(ref mut thunk, start, end, opt) => {
-                Thunk::do_slice(thunk, *start, *end, *opt, doc)
+                do_slice(thunk, *start, *end, *opt, doc)
             },
+
             Iterate(ref mut thunk, ref mut thunks, opt) => {
-                Thunk::do_iterate(thunk, thunks, *opt, doc)
+                do_iterate(thunk, thunks, *opt, doc)
             },
+
             List(ref mut thunks, opt) => {
-                Thunk::do_list(thunks, *opt, doc)
+                do_list(thunks, *opt, doc)
             },
+
             Pipe(ref mut lhs_thunk, ref mut rhs_thunk) => {
-                Thunk::do_pipe(lhs_thunk, rhs_thunk, doc)
+                do_pipe(lhs_thunk, rhs_thunk, doc)
             },
+
             _ => unimplemented!(),
         }
     }
@@ -254,6 +148,90 @@ impl FnOnce<(Json,)> for Thunk {
         self.call_mut(args)
     }
 }
+
+fn do_index_shortcut(key: &String, off: Option<usize>, opt: bool, doc: Json)
+    -> Result<Output>
+{
+    use json::Json::{Object, Array};
+
+    //println!("Thunk::IndexKey {:?} {}", doc, key);
+    match doc {
+        Array(a) => Thunk::index_array(a, &key, off, opt),
+        Object(m) => Thunk::index_object(m, &key, opt),
+        _ => match opt {
+            true => Ok(Output::One(Json::Null)),
+            false => Err(Error::Op(format!("not an object {:?}", doc))),
+        }
+    }
+}
+
+fn do_slice(
+    thunk: &mut Thunk, start: usize, end: usize, opt: bool, doc: Json)
+    -> Result<Output>
+{
+    match (opt, thunk(doc)?.slice(start, end)) {
+        (true, Err(_)) => Ok(Output::One(Json::Null)),
+        (_, res) => res,
+    }
+}
+
+fn do_iterate(
+    _thunk: &mut Thunk, _thunks: &mut Thunk, _opt: bool, _doc: Json)
+    -> Result<Output>
+{
+    unimplemented!()
+}
+
+fn do_list(_thunks: &mut Thunk, _opt: bool, _doc: Json)
+    -> Result<Output>
+{
+    unimplemented!()
+}
+
+fn do_pipe(_lhs_thunk: &mut Thunk, _rhs_thunk: &mut Thunk, _doc: Json)
+    -> Result<Output>
+{
+    unimplemented!()
+}
+
+fn index_array(a: Vec<Json>, key: &str, off: Option<usize>, opt: bool)
+    -> Result<Output>
+{
+    match (off, opt) {
+        (None, true) => {
+            Ok(Output::One(Json::Null))
+        },
+        (None, false) => {
+            Err(Error::Op(format!("not an array index {}", key)))
+        },
+        (Some(off), true) if off >= a.len() => {
+            Ok(Output::One(Json::Null))
+        },
+        (Some(off), false) if off >= a.len() => {
+            Err(Error::Op(format!("offset {} out of bound", off)))
+        },
+        (Some(off), _) => {
+            Ok(Output::One(a.into_iter().nth(off).unwrap()))
+        },
+    }
+}
+
+fn index_object(m: Vec<KeyValue>, key: &str, opt: bool)
+    -> Result<Output>
+{
+    use json::search_by_key;
+
+    match search_by_key(&m, key) {
+        Ok(i) => {
+            Ok(Output::One(m.into_iter().nth(i).unwrap().1))
+        },
+        Err(_) => match opt {
+            true => Ok(Output::One(Json::Null)),
+            false => Err(Error::Op(format!("missing key {}", key))),
+        }
+    }
+}
+
 
 
 #[cfg(test)]
