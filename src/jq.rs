@@ -18,7 +18,6 @@ pub enum Error {
     Parse(String),
     ParseJson(json::Error),
     Op(String),
-    NomE(u32),
 }
 
 impl fmt::Display for Error {
@@ -29,7 +28,6 @@ impl fmt::Display for Error {
             Parse(s) => write!(f, "{}", s),
             ParseJson(err) => write!(f, "{}", err),
             Op(s) => write!(f, "{}", s),
-            NomE(err) => write!(f, "nom err {}", err),
         }
     }
 }
@@ -44,32 +42,32 @@ impl From<json::Error> for Error {
     }
 }
 
-impl From<u32> for Error {
-    fn from(err: u32) -> Error {
-        Error::NomE(err)
+impl<'a> From<nom::Err<S<'a>>> for Error {
+    fn from(err: nom::Err<S<'a>>) -> Error {
+        use nom::simple_errors::Context as NomContext;
+
+        match err {
+            nom::Err::Incomplete(_) => {
+                Error::Parse(format!("{}", err))
+            },
+            nom::Err::Error(NomContext::Code(rem, _)) => {
+                let rem_till = cmp::min(5, rem.len());
+                Error::Parse(format!("error at {:}", &rem[..rem_till]))
+            },
+            nom::Err::Failure(NomContext::Code(rem, _)) => {
+                let rem_till = cmp::min(5, rem.len());
+                Error::Parse(format!("failure at {:}", &rem[..rem_till]))
+            },
+        }
     }
 }
 
 
 pub fn parse_program(text: &str) -> Result<Box<Thunk>> {
-    use nom::simple_errors::Context as NomContext;
-
-    match nom_program(S(text)) {
-        Ok((_, thunk)) => Ok(Box::new(thunk)),
-
-        Err(err @ nom::Err::Incomplete(_)) => {
-            Err(Error::Parse(format!("{}", err)))
-        },
-        Err(nom::Err::Error(NomContext::Code(rem, _))) => {
-            let rem_till = cmp::min(5, rem.len());
-            Err(Error::Parse(format!("error at {:}", &rem[..rem_till])))
-        },
-        Err(nom::Err::Failure(NomContext::Code(rem, _))) => {
-            let rem_till = cmp::min(5, rem.len());
-            Err(Error::Parse(format!("failure at {:}", &rem[..rem_till])))
-        },
-    }
+    let (_, thunk) = nom_program(S(text))?;
+    Ok(Box::new(thunk))
 }
+
 
 #[derive(Debug)]
 pub enum Thunk {
