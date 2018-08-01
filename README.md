@@ -1,7 +1,7 @@
 Bigdata with Rust
 -----------------
 
-`db.rs` is a big-data package with following primary scope.
+`db-rs` is a big-data package with following primary scope.
 
 1. [x] Interpret data in JSON format.
 2. [ ] Query JSON documents using [jq][jq].

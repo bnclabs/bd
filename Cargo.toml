@@ -1,5 +1,5 @@
 [package]
-name = "db.rs"
+name = "db-rs"
 version = "0.1.0"
 authors = ["prataprc <prataprc@gmail.com>"]
 
