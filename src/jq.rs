@@ -1,17 +1,44 @@
 use std::{result, error, cmp};
 use std::fmt::{self};
 
-use json::{self, Json, KeyValue};
-use json::{parse_string, parse_array, parse_object};
-use lex::Lex;
 use nom::{self, {types::CompleteStr as S}};
 
-include!("./jq_nom.rs");
-//include!("./jq_context.rs");
-include!("./jq_output.rs");
+use json::{self, Json, KeyValue};
+use jqnom::parse_program_nom;
 
+
+type Output = Vec<Json>;
 
 pub type Result<T> = result::Result<T,Error>;
+
+    //fn slice(self, start: usize, end: usize) -> Result<Output> {
+    //    use jq::Output::{One, Many};
+    //    match self {
+    //        One(scalar) => Output::slice_one(scalar, start, end),
+    //        Many(vector) => Output::slice_many(vector, start, end),
+    //    }
+    //}
+
+    //fn slice_one(doc: Json, start: usize, end: usize) -> Result<Output> {
+    //    match doc.slice(start, end) {
+    //        Some(arr) => Ok(Output::One(arr)),
+    //        None => Err(Error::Op(format!("cannot slice")))
+    //    }
+    //}
+
+    //fn slice_many(docs: Vec<Json>, start: usize, end: usize)
+    //    -> Result<Output>
+    //{
+    //    let mut outs = Vec::new();
+
+    //    for doc in docs {
+    //        match doc.slice(start, end) {
+    //            Some(arr) => outs.push(arr),
+    //            None => return Err(Error::Op(format!("can't slice")))
+    //        }
+    //    }
+    //    Ok(Output::Many(outs))
+    //}
 
 
 #[derive(Debug,Eq,PartialEq)]
@@ -65,7 +92,7 @@ impl<'a> From<nom::Err<S<'a>>> for Error {
 
 
 pub fn parse_program(text: &str) -> Result<Box<Thunk>> {
-    let (_, thunk) = nom_program(S(text))?;
+    let (_, thunk) = parse_program_nom(S(text))?;
     Ok(Box::new(thunk))
 }
 
@@ -112,9 +139,9 @@ impl FnMut<(Json,)> for Thunk {
 
         let doc = args.0;
         match self {
-            Empty => Ok(Output::One(doc)),
-            Identity => Ok(Output::One(doc)),
-            Literal(literal) => Ok(Output::One(literal.clone())),
+            Empty => Ok(vec![doc]),
+            Identity => Ok(vec![doc]),
+            Literal(literal) => Ok(vec![literal.clone()]),
 
             IndexShortcut(key, off, opt) => {
                 do_index_shortcut(key, *off, *opt, doc)
@@ -152,27 +179,29 @@ impl FnOnce<(Json,)> for Thunk {
 fn do_index_shortcut(key: &String, off: Option<usize>, opt: bool, doc: Json)
     -> Result<Output>
 {
-    use json::Json::{Object, Array};
+    //use json::Json::{Object, Array};
 
-    //println!("Thunk::IndexKey {:?} {}", doc, key);
-    match doc {
-        Array(a) => index_array(a, &key, off, opt),
-        Object(m) => index_object(m, &key, opt),
-        _ => match opt {
-            true => Ok(Output::One(Json::Null)),
-            false => Err(Error::Op(format!("not an object {:?}", doc))),
-        }
-    }
+    ////println!("Thunk::IndexKey {:?} {}", doc, key);
+    //match doc {
+    //    Array(a) => index_array(a, &key, off, opt),
+    //    Object(m) => index_object(m, &key, opt),
+    //    _ => match opt {
+    //        true => Ok(Output::One(Json::Null)),
+    //        false => Err(Error::Op(format!("not an object {:?}", doc))),
+    //    }
+    //}
+    unimplemented!()
 }
 
 fn do_slice(
     thunk: &mut Thunk, start: usize, end: usize, opt: bool, doc: Json)
     -> Result<Output>
 {
-    match (opt, thunk(doc)?.slice(start, end)) {
-        (true, Err(_)) => Ok(Output::One(Json::Null)),
-        (_, res) => res,
-    }
+    //match (opt, thunk(doc)?.slice(start, end)) {
+    //    (true, Err(_)) => Ok(Output::One(Json::Null)),
+    //    (_, res) => res,
+    //}
+    unimplemented!()
 }
 
 fn do_iterate(
@@ -194,44 +223,43 @@ fn do_pipe(_lhs_thunk: &mut Thunk, _rhs_thunk: &mut Thunk, _doc: Json)
     unimplemented!()
 }
 
-fn index_array(a: Vec<Json>, key: &str, off: Option<usize>, opt: bool)
-    -> Result<Output>
-{
-    match (off, opt) {
-        (None, true) => {
-            Ok(Output::One(Json::Null))
-        },
-        (None, false) => {
-            Err(Error::Op(format!("not an array index {}", key)))
-        },
-        (Some(off), true) if off >= a.len() => {
-            Ok(Output::One(Json::Null))
-        },
-        (Some(off), false) if off >= a.len() => {
-            Err(Error::Op(format!("offset {} out of bound", off)))
-        },
-        (Some(off), _) => {
-            Ok(Output::One(a.into_iter().nth(off).unwrap()))
-        },
-    }
-}
-
-fn index_object(m: Vec<KeyValue>, key: &str, opt: bool)
-    -> Result<Output>
-{
-    use json::search_by_key;
-
-    match search_by_key(&m, key) {
-        Ok(i) => {
-            Ok(Output::One(m.into_iter().nth(i).unwrap().1))
-        },
-        Err(_) => match opt {
-            true => Ok(Output::One(Json::Null)),
-            false => Err(Error::Op(format!("missing key {}", key))),
-        }
-    }
-}
-
+//fn index_array(a: Vec<Json>, key: &str, off: Option<usize>, opt: bool)
+//    -> Result<Output>
+//{
+//    match (off, opt) {
+//        (None, true) => {
+//            Ok(Output::One(Json::Null))
+//        },
+//        (None, false) => {
+//            Err(Error::Op(format!("not an array index {}", key)))
+//        },
+//        (Some(off), true) if off >= a.len() => {
+//            Ok(Output::One(Json::Null))
+//        },
+//        (Some(off), false) if off >= a.len() => {
+//            Err(Error::Op(format!("offset {} out of bound", off)))
+//        },
+//        (Some(off), _) => {
+//            Ok(Output::One(a.into_iter().nth(off).unwrap()))
+//        },
+//    }
+//}
+//
+//fn index_object(m: Vec<KeyValue>, key: &str, opt: bool)
+//    -> Result<Output>
+//{
+//    use json::search_by_key;
+//
+//    match search_by_key(&m, key) {
+//        Ok(i) => {
+//            Ok(Output::One(m.into_iter().nth(i).unwrap().1))
+//        },
+//        Err(_) => match opt {
+//            true => Ok(Output::One(Json::Null)),
+//            false => Err(Error::Op(format!("missing key {}", key))),
+//        }
+//    }
+//}
 
 
 #[cfg(test)]

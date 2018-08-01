@@ -2,12 +2,13 @@ use std::{self, result, char, error, io};
 use std::str::{self, FromStr,CharIndices};
 use std::fmt::{self, Write};
 use std::cmp::Ordering;
-use std::ops::Index;
+use std::ops::{Index, IndexMut};
+use std::ops::{Range, RangeFrom, RangeTo, RangeToInclusive, RangeInclusive};
+use std::ops::{RangeFull};
 
 use lex::Lex;
 
 include!("./json.rs.lookup");
-
 
 pub type Result<T> = result::Result<T,Error>;
 
@@ -15,8 +16,17 @@ pub type Result<T> = result::Result<T,Error>;
 #[derive(Debug,Eq,PartialEq)]
 pub enum Error {
     Parse(String),
-    Float(std::num::ParseFloatError, String),
-    Int(std::num::ParseIntError, String),
+    ParseFloat(std::num::ParseFloatError, String),
+    ParseInt(std::num::ParseIntError, String),
+    NotMyType(String),
+    KeyMissing(usize, String),
+    IndexUnbound(usize, usize),
+}
+
+impl Error {
+    fn key_missing_at(&self) -> usize {
+        match *self { Error::KeyMissing(at, _) => at, _ => unreachable!() }
+    }
 }
 
 impl fmt::Display for Error {
@@ -25,8 +35,11 @@ impl fmt::Display for Error {
 
         match self {
             Parse(s) => write!(f, "{}", s),
-            Float(err, s) => write!(f, "{}, {}", err, s),
-            Int(err, s) => write!(f, "{}, {}", err, s),
+            ParseFloat(err, s) => write!(f, "{}, {}", err, s),
+            ParseInt(err, s) => write!(f, "{}, {}", err, s),
+            NotMyType(s) => write!(f, "not expected type {}", s),
+            KeyMissing(_, key) => write!(f, "missing key {}", key),
+            IndexUnbound(s,e) => write!(f, "index out of bound {}..{}", s, e),
         }
     }
 }
@@ -34,8 +47,8 @@ impl fmt::Display for Error {
 impl error::Error for Error {
     fn cause(&self) -> Option<&error::Error> {
         match self {
-            Error::Float(err, _) => Some(err),
-            Error::Int(err, _) => Some(err),
+            Error::ParseFloat(err, _) => Some(err),
+            Error::ParseInt(err, _) => Some(err),
             _ => None,
         }
     }
@@ -43,13 +56,13 @@ impl error::Error for Error {
 
 impl From<std::num::ParseFloatError> for Error {
     fn from(err: std::num::ParseFloatError) -> Error {
-        Error::Float(err, String::new())
+        Error::ParseFloat(err, String::new())
     }
 }
 
 impl From<std::num::ParseIntError> for Error {
     fn from(err: std::num::ParseIntError) -> Error {
-        Error::Int(err, String::new())
+        Error::ParseInt(err, String::new())
     }
 }
 
@@ -176,12 +189,12 @@ pub fn parse_value(text: &str, lex: &mut Lex) -> Result<Json> {
 
     // gather up lexical position for a subset of error-variants.
     match v {
-        Err(Error::Float(e, _)) => {
-            Err(Error::Float(e, lex.format("invalid float")))
+        Err(Error::ParseFloat(e, _)) => {
+            Err(Error::ParseFloat(e, lex.format("invalid float")))
         },
 
-        Err(Error::Int(e, _)) => {
-            Err(Error::Int(e, lex.format("invalid integer")))
+        Err(Error::ParseInt(e, _)) => {
+            Err(Error::ParseInt(e, lex.format("invalid integer")))
         }
 
         rc => rc,
@@ -358,9 +371,7 @@ fn decode_json_hex_code2(chars: &mut CharIndices, lex: &mut Lex)
 }
 
 
-pub fn parse_array(text: &str, lex: &mut Lex)
-    -> Result<Json>
-{
+pub fn parse_array(text: &str, lex: &mut Lex) -> Result<Json> {
     lex.incr_col(1); // skip '['
 
     let mut array = Vec::new();
@@ -384,21 +395,19 @@ pub fn parse_array(text: &str, lex: &mut Lex)
     }
 }
 
-pub fn parse_object(text: &str, lex: &mut Lex)
-    -> Result<Json>
-{
+pub fn parse_object(text: &str, lex: &mut Lex) -> Result<Json> {
     lex.incr_col(1); // skip '{'
 
-    let mut map = Vec::new();
+    let mut m = Vec::new();
     parse_whitespace(text, lex);
     if (&text[lex.off..]).as_bytes()[0] == b'}' {
         lex.incr_col(1);
-        return Ok(Json::Object(map))
+        return Ok(Json::Object(m))
     }
     loop {
         // key
         parse_whitespace(text, lex);
-        let key: String = parse_string(text, lex)?.string();
+        let key: String = parse_string(text, lex)?.string().unwrap();
         // colon
         parse_whitespace(text, lex);
         check_next_byte(text, lex, b':')?;
@@ -407,9 +416,9 @@ pub fn parse_object(text: &str, lex: &mut Lex)
         parse_whitespace(text, lex);
         let value = parse_value(text, lex)?;
 
-        let i = match search_by_key(&map, &key) {Ok(i) => i, Err(i) => i};
-        //println!("parse {} {} {:?}", key, i, map);
-        map.insert(i, KeyValue(key, value));
+        let i = search_by_key(&m, &key).unwrap_or_else(|e| e.key_missing_at());
+        //println!("parse {} {} {:?}", key, i, m);
+        m.insert(i, KeyValue(key, value));
 
         // is exit
         parse_whitespace(text, lex);
@@ -417,7 +426,7 @@ pub fn parse_object(text: &str, lex: &mut Lex)
             break Err(Error::Parse(lex.format("unexpected eof")))
         } else if (&text[lex.off..]).as_bytes()[0] == b'}' { // exit
             lex.incr_col(1);
-            break Ok(Json::Object(map))
+            break Ok(Json::Object(m))
         } else if (&text[lex.off..]).as_bytes()[0] == b',' { // skip comma
             lex.incr_col(1);
         }
@@ -502,6 +511,49 @@ pub enum Json {
 }
 
 impl Json {
+    pub fn is_array(&self) -> bool {
+        match self { Json::Array(_) => true, _ => false }
+    }
+
+    pub fn is_bool(&self) -> bool {
+        match self { Json::Object(_) => true, _ => false }
+    }
+
+    pub fn string(self) -> Result<String> {
+        match self {
+            Json::String(s) => Ok(s),
+            _ => Err(Error::NotMyType("not a string".to_string()))
+        }
+    }
+
+    pub fn array_ref(&self) -> Result<&Vec<Json>> {
+        match self {
+            Json::Array(a) => Ok(a),
+            _ => Err(Error::NotMyType("json is not array".to_string())),
+        }
+    }
+
+    pub fn array_mut(&mut self) -> Result<&mut Vec<Json>> {
+        match self {
+            Json::Array(a) => Ok(a),
+            _ => Err(Error::NotMyType("json is not array".to_string()))
+        }
+    }
+
+    pub fn object_ref(&self) -> Result<&Vec<KeyValue>> {
+        match self {
+            Json::Object(o) => Ok(o),
+            _ => Err(Error::NotMyType("json is not object".to_string()))
+        }
+    }
+
+    pub fn object_mut(&mut self) -> Result<&mut Vec<KeyValue>> {
+        match self {
+            Json::Object(o) => Ok(o),
+            _ => Err(Error::NotMyType("json is not object".to_string()))
+        }
+    }
+
     pub fn to_json(&self, text: &mut String) {
         use json::Json::{Null, Bool, Integer, Float, Array, Object};
 
@@ -544,47 +596,6 @@ impl Json {
         }
     }
 
-    pub fn is_bool(self) -> bool {
-        match self { Json::Bool(_) => true, _ => false }
-    }
-
-    pub fn bool(self) -> bool {
-        match self { Json::Bool(v) => v, _ => panic!("{:?} not bool", self) }
-    }
-
-    pub fn is_string(self) -> bool {
-        match self { Json::String(_) => true, _ => false }
-    }
-
-    pub fn string(self) -> String {
-        match self {Json::String(v) => v, _ => panic!("{:?} not string", self)}
-    }
-
-    pub fn is_array(self) -> bool {
-        match self { Json::Array(_) => true, _ => false }
-    }
-
-    pub fn array(self) -> Vec<Json> {
-        match self {Json::Array(v) => v, _ => panic!("{:?} not array", self)}
-    }
-
-    pub fn is_object(self) -> bool {
-        match self { Json::Object(_) => true, _ => false }
-    }
-
-    pub fn object(self) -> Vec<KeyValue> {
-        match self {Json::Object(v) => v, _ => panic!("{:?} not object", self)}
-    }
-
-    pub fn slice(self, start: usize, end: usize) -> Option<Json> {
-        use json::Json::Array;
-
-        match self {
-            Array(a) => Some(Array((&a[start..end]).to_vec())),
-            _ => None,
-        }
-    }
-
     fn encode_string(val: &str, text: &mut String) {
         text.push('"');
 
@@ -605,19 +616,138 @@ impl Json {
 
         text.push('"');
     }
+
+    pub fn index(&self, i: usize) -> Result<&Json> {
+        let a = self.array_ref()?;
+        if i < a.len() { Ok(&a[i]) } else { Err(Error::IndexUnbound(i, i)) }
+    }
+
+    pub fn index_mut(&mut self, i: usize) -> Result<&mut Json> {
+        use json::Error::IndexUnbound;
+        let a = self.array_mut()?;
+        if i < a.len() { Ok(&mut a[i]) } else { Err(IndexUnbound(i, i)) }
+    }
+
+    pub fn get<'a>(&self, key: &'a str) -> Result<&Json> {
+        let m = self.object_ref()?;
+        let off = search_by_key(m, key)?;
+        Ok(&m[off].1)
+    }
+
+    pub fn get_mut<'a>(&mut self, key: &'a str) -> Result<&mut Json> {
+        let m = self.object_mut()?;
+        let off = search_by_key(m, key)?;
+        Ok(&mut m[off].1)
+    }
+}
+
+impl Index<usize> for Json {
+    type Output=Json;
+
+    fn index(&self, off: usize) -> &Json {
+        self.index(off).unwrap()
+    }
+}
+
+impl IndexMut<usize> for Json {
+    fn index_mut(&mut self, off: usize) -> &mut Json {
+        self.index_mut(off).unwrap()
+    }
 }
 
 impl<'a> Index<&'a str> for Json {
     type Output=Json;
 
     fn index(&self, key: &str) -> &Json {
-        let m = match self { Json::Object(m) => m, _ => return &Json::Null };
-        match search_by_key(&m, key) {
-            Ok(i) => &m[i].1,
-            Err(_) => &Json::Null,
-        }
+        self.get(key).unwrap()
     }
 }
+
+impl<'a> IndexMut<&'a str> for Json {
+    fn index_mut(&mut self, key: &str) -> &mut Json {
+        self.get_mut(key).unwrap()
+    }
+}
+
+impl Index<Range<usize>> for Json {
+    type Output=[Json];
+
+    fn index(&self, r: Range<usize>) -> &[Json] {
+        self.array_ref().unwrap().index(r)
+    }
+}
+
+impl Index<RangeFrom<usize>> for Json {
+    type Output=[Json];
+
+    fn index(&self, r: RangeFrom<usize>) -> &[Json] {
+        self.array_ref().unwrap().index(r)
+    }
+}
+
+impl Index<RangeTo<usize>> for Json {
+    type Output=[Json];
+
+    fn index(&self, r: RangeTo<usize>) -> &[Json] {
+        self.array_ref().unwrap().index(r)
+    }
+}
+
+impl Index<RangeToInclusive<usize>> for Json {
+    type Output=[Json];
+
+    fn index(&self, r: RangeToInclusive<usize>) -> &[Json] {
+        self.array_ref().unwrap().index(r)
+    }
+}
+
+impl Index<RangeInclusive<usize>> for Json {
+    type Output=[Json];
+
+    fn index(&self, r: RangeInclusive<usize>) -> &[Json] {
+        self.array_ref().unwrap().index(r)
+    }
+}
+
+impl Index<RangeFull> for Json {
+    type Output=[Json];
+
+    fn index(&self, r: RangeFull) -> &[Json] {
+        self.array_ref().unwrap().index(r)
+    }
+}
+
+//impl Index<usize> for Json {
+//    type Output=Json;
+//
+//    fn index(&self, off: usize) -> &Json {
+//        self.index(off).unwrap()
+//    }
+//}
+//
+//impl Index<usize> for Json {
+//    type Output=Json;
+//
+//    fn index(&self, off: usize) -> &Json {
+//        self.index(off).unwrap()
+//    }
+//}
+//
+//impl Index<usize> for Json {
+//    type Output=Json;
+//
+//    fn index(&self, off: usize) -> &Json {
+//        self.index(off).unwrap()
+//    }
+//}
+//
+//impl Index<usize> for Json {
+//    type Output=Json;
+//
+//    fn index(&self, off: usize) -> &Json {
+//        self.index(off).unwrap()
+//    }
+//}
 
 impl FromStr for Json {
     type Err=Error;
@@ -636,14 +766,12 @@ impl fmt::Display for Json {
 }
 
 
-pub fn search_by_key(obj: &Vec<KeyValue>, key: &str)
-    -> result::Result<usize, usize>
-{
+pub fn search_by_key(obj: &Vec<KeyValue>, key: &str) -> Result<usize> {
     use std::cmp::Ordering::{Greater, Equal, Less};
 
     let mut size = obj.len();
     if size == 0 {
-        return Err(0);
+        return Err(Error::KeyMissing(0, key.to_string()))
     }
 
     let mut base = 0usize;
@@ -660,10 +788,43 @@ pub fn search_by_key(obj: &Vec<KeyValue>, key: &str)
     // base is always in [0, size) because base <= mid.
     let item: &str = &obj[base].0;
     let cmp = item.cmp(key);
-    if cmp == Equal { Ok(base) } else { Err(base + (cmp == Less) as usize) }
+    if cmp == Equal {
+        Ok(base)
+    } else {
+        Err(Error::KeyMissing(base + (cmp == Less) as usize, key.to_string()))
+    }
 }
 
 
+pub trait Value {
+    fn value(self) -> Json;
+    fn value_as_ref(&self) -> &Json;
+    fn value_as_mut(&mut self) -> &mut Json;
+}
+
+impl Value for Json {
+    fn value(self) -> Json {
+        self
+    }
+    fn value_as_ref(&self) -> &Json {
+        self
+    }
+    fn value_as_mut(&mut self) -> &mut Json {
+        self
+    }
+}
+
+impl Value for KeyValue {
+    fn value(self) -> Json {
+        self.1
+    }
+    fn value_as_ref(&self) -> &Json {
+        &self.1
+    }
+    fn value_as_mut(&mut self) -> &mut Json {
+        &mut self.1
+    }
+}
 
 #[cfg(test)]
 mod tests {

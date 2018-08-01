@@ -1,3 +1,9 @@
+use nom::{self, {types::CompleteStr as S}, IResult};
+
+use lex::Lex;
+use json::{Json, parse_string, parse_array, parse_object};
+use jq::Thunk;
+
 named!(nom_dot(S) -> S, tag!("."));
 named!(nom_dotdot(S) -> S, tag!(".."));
 named!(nom_colon(S) -> S, tag!(":"));
@@ -559,4 +565,8 @@ fn check_next_byte(text: S, b: u8) -> nom::IResult<S, ()> {
         return Err(nom::Err::Error(ctxt))
     }
     Ok((text, ()))
+}
+
+pub fn parse_program_nom<'a>(s: S<'a>) -> IResult<S<'a>, Thunk> {
+    nom_program(s)
 }
