@@ -79,7 +79,7 @@ fn nom_object(text: S) -> nom::IResult<S, Json> {
 //    Compar     <- BitOr ComparExpr*
 //    ComparExpr <- ('==' | '!=' | '<' | '<=' | '>' | '>=' ) BitOr
 //    BitOr      <- BitXor BitOrExpr*
-//    BitOrExpr  <- ('|') BitXor
+//    BitOrExpr  <- ('bor') BitXor
 //    BitXor     <- BitAnd BitXorExpr*
 //    BitXorExpr <- ('^') BitAnd
 //    BitAnd     <- Shift BitAndExpr*
@@ -221,7 +221,7 @@ named!(nom_bitor(S) -> Thunk,
 );
 named!(nom_bitor_expr(S) -> Thunk,
     do_parse!(
-              tag!("bitor") >>
+              tag!("bor") >>
         expr: nom_bitxor >>
         (expr)
     )

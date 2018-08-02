@@ -2,7 +2,8 @@ use std::{self, result, char, error, io};
 use std::str::{self, FromStr,CharIndices};
 use std::fmt::{self, Write};
 use std::cmp::Ordering;
-use std::ops::{Index, IndexMut};
+use std::ops::{Neg, Not, Mul, Div, Rem, Add, Sub, Shr, Shl, BitAnd, BitXor};
+use std::ops::{BitOr, Index, IndexMut};
 use std::ops::{Range, RangeFrom, RangeTo, RangeToInclusive, RangeInclusive};
 use std::ops::{RangeFull};
 
@@ -717,6 +718,199 @@ impl Index<RangeFull> for Json {
     }
 }
 
+impl<'a> Neg for &'a Json {
+    type Output=Json;
+
+    fn neg(self) -> Json {
+        match self {
+            Json::Integer(n) => Json::Integer(-n),
+            _ => Json::Null,
+        }
+    }
+}
+
+impl<'a> Not for &'a Json {
+    type Output=Json;
+
+    fn not(self) -> Json {
+        match self {
+            Json::Bool(val) => Json::Bool(!val),
+            _ => Json::Null,
+        }
+    }
+}
+
+impl<'a> Mul for &'a Json {
+    type Output=Json;
+
+    fn mul(self, rhs: &Json) -> Json {
+        use json::Json::{Null,Bool,Integer,Float,Array,Object, String as S};
+
+        match (self, rhs) {
+            (Integer(l), Integer(r)) => Integer(l*r),
+            (Integer(l), Float(r)) => Float((*l as f64)*r),
+            (Integer(l), val) => val.mul(self),
+            (Float(l), Float(r)) => Float(l*r),
+            (Float(l), Integer(r)) => Float(l*(*r as f64)),
+            (Float(l), val) => val.mul(self),
+            (Null, _) => Null,
+            (Bool(false), _) => Null,
+            (Bool(true), val) => val.clone(),
+            (S(s), Integer(n)) => S(s.repeat(*n as usize)),
+            (S(_), _) => Null,
+            (Object(o), Bool(true)) => Object(o.clone()),
+            (Object(_), _) => Null,
+            (Array(a), Integer(n)) => {
+                let mut v = vec![];
+                (0..*n).for_each(|_| v.extend_from_slice(a));
+                Array(v)
+            },
+            (Array(a), Bool(true)) => Array(a.clone()),
+            (Array(_), _) => Null,
+        }
+    }
+}
+
+impl<'a> Div for &'a Json {
+    type Output=Json;
+
+    fn div(self, rhs: &Json) -> Json {
+        use json::Json::{Null,Integer,Float};
+
+        match (self, rhs) {
+            (Integer(l), Integer(0)) => Null,
+            (Integer(l), Integer(r)) => Integer(l/r),
+            (Integer(l), Float(0.0)) => Null,
+            (Integer(l), Float(r)) => Float((*l as f64)/r),
+            (Integer(l), val) => val.div(self),
+            (Float(l), Float(r)) => Float(l/r),
+            (Float(l), Integer(r)) => Float(l/(*r as f64)),
+            (Float(l), val) => val.div(self),
+            (_, _) => Null,
+        }
+    }
+}
+
+impl<'a> Rem for &'a Json {
+    type Output=Json;
+
+    fn rem(self, rhs: &Json) -> Json {
+        use json::Json::{Null,Integer,Float};
+
+        match (self, rhs) {
+            (Integer(l), Integer(0)) => Null,
+            (Integer(l), Integer(r)) => Integer(l%r),
+            (Integer(l), Float(0.0)) => Null,
+            (Integer(l), Float(r)) => Float((*l as f64)%r),
+            (Integer(l), val) => val.rem(self),
+            (Float(l), Float(r)) => Float(l%r),
+            (Float(l), Integer(r)) => Float(l%(*r as f64)),
+            (Float(l), val) => val.rem(self),
+            (_, _) => Null,
+        }
+    }
+}
+
+impl<'a> Add for &'a Json {
+    type Output=Json;
+
+    fn add(self, rhs: &Json) -> Json {
+        use json::Json::{Null,Integer,Float,Array, String as S};
+
+        match (self, rhs) {
+            (Integer(l), Integer(r)) => Integer(l+r),
+            (Integer(l), Float(r)) => Float((*l as f64)+r),
+            (Integer(l), val) => val.add(self),
+            (Float(l), Float(r)) => Float(l+r),
+            (Float(l), Integer(r)) => Float(l+(*r as f64)),
+            (Float(l), val) => val.add(self),
+            (S(l), S(r)) => {
+                let mut s = String::new(); s.push_str(l); s.push_str(r);
+                S(s)
+            }
+            (Array(l), Array(r)) => {
+                let mut a = vec![];
+                a.extend_from_slice(l);
+                a.extend_from_slice(r);
+                Array(a)
+            }
+            (_, _) => Null,
+        }
+    }
+}
+
+impl<'a> Sub for &'a Json {
+    type Output=Json;
+
+    fn sub(self, rhs: &Json) -> Json {
+        use json::Json::{Null,Integer,Float};
+
+        match (self, rhs) {
+            (Integer(l), Integer(r)) => Integer(l-r),
+            (Integer(l), Float(r)) => Float((*l as f64)-r),
+            (Integer(l), val) => val.sub(self),
+            (Float(l), Float(r)) => Float(l-r),
+            (Float(l), Integer(r)) => Float(l-(*r as f64)),
+            (Float(l), val) => val.sub(self),
+            (_, _) => Null,
+        }
+    }
+}
+
+impl<'a> Shl for &'a Json {
+    type Output=Json;
+
+    fn shl(self, rhs: &Json) -> Json {
+        match (self, rhs) {
+            (Json::Integer(l), Json::Integer(r)) => Json::Integer(l<<r),
+            (_, _) => Json::Null,
+        }
+    }
+}
+
+impl<'a> Shr for &'a Json {
+    type Output=Json;
+
+    fn shr(self, rhs: &Json) -> Json {
+        match (self, rhs) {
+            (Json::Integer(l), Json::Integer(r)) => Json::Integer(l>>r),
+            (_, _) => Json::Null,
+        }
+    }
+}
+
+impl<'a> BitAnd for &'a Json {
+    type Output=Json;
+
+    fn bitand(self, rhs: &Json) -> Json {
+        match (self, rhs) {
+            (Json::Integer(l), Json::Integer(r)) => Json::Integer(l&r),
+            (_, _) => Json::Null,
+        }
+    }
+}
+
+impl<'a> BitXor for &'a Json {
+    type Output=Json;
+
+    fn bitxor(self, rhs: &Json) -> Json {
+        match (self, rhs) {
+            (Json::Integer(l), Json::Integer(r)) => Json::Integer(l^r),
+            (_, _) => Json::Null,
+        }
+    }
+}
+
+impl<'a> BitOr for &'a Json {
+    type Output=Json;
+
+    fn bitor(self, rhs: &Json) -> Json {
+        match (self, rhs) {
+            (Json::Integer(l), Json::Integer(r)) => Json::Integer(l|r),
+            (_, _) => Json::Null,
+        }
+    }
+}
 
 
 impl FromStr for Json {
