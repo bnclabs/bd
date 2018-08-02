@@ -717,37 +717,7 @@ impl Index<RangeFull> for Json {
     }
 }
 
-//impl Index<usize> for Json {
-//    type Output=Json;
-//
-//    fn index(&self, off: usize) -> &Json {
-//        self.index(off).unwrap()
-//    }
-//}
-//
-//impl Index<usize> for Json {
-//    type Output=Json;
-//
-//    fn index(&self, off: usize) -> &Json {
-//        self.index(off).unwrap()
-//    }
-//}
-//
-//impl Index<usize> for Json {
-//    type Output=Json;
-//
-//    fn index(&self, off: usize) -> &Json {
-//        self.index(off).unwrap()
-//    }
-//}
-//
-//impl Index<usize> for Json {
-//    type Output=Json;
-//
-//    fn index(&self, off: usize) -> &Json {
-//        self.index(off).unwrap()
-//    }
-//}
+
 
 impl FromStr for Json {
     type Err=Error;

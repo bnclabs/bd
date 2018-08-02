@@ -8,6 +8,7 @@ named!(nom_dot(S) -> S, tag!("."));
 named!(nom_dotdot(S) -> S, tag!(".."));
 named!(nom_colon(S) -> S, tag!(":"));
 named!(nom_comma(S) -> S, tag!(","));
+named!(nom_equal(S) -> S, tag!("="));
 named!(nom_open_sqr(S) -> S, tag!("["));
 named!(nom_clos_sqr(S) -> S, tag!("]"));
 named!(nom_open_brace(S) -> S, tag!("{"));
@@ -372,16 +373,73 @@ named!(nom_primary_index_short(S) -> (Json, Option<S>),
         (key, opt)
     )
 );
-named!(nom_primary_slice(S) -> (Thunk, usize, usize, Option<S>),
+named!(nom_primary_slice1(S) -> (Thunk, usize, usize, Option<S>),
     do_parse!(
          thunk: nom_primary_expr >>
                 nom_open_sqr >>
          start: nom_usize >>
-                nom_colon    >>
+                nom_dotdot    >>
+                nom_equal    >>
+           end: nom_usize >>
+                nom_clos_sqr >>
+           opt: nom_opt      >>
+        (thunk, start, (end+1), opt)
+    )
+);
+named!(nom_primary_slice2(S) -> (Thunk, usize, usize, Option<S>),
+    do_parse!(
+         thunk: nom_primary_expr >>
+                nom_open_sqr >>
+         start: nom_usize >>
+                nom_dotdot    >>
            end: nom_usize >>
                 nom_clos_sqr >>
            opt: nom_opt      >>
         (thunk, start, end, opt)
+    )
+);
+named!(nom_primary_slice3(S) -> (Thunk, usize, usize, Option<S>),
+    do_parse!(
+         thunk: nom_primary_expr >>
+                nom_open_sqr >>
+         start: nom_usize >>
+                nom_dotdot    >>
+                nom_clos_sqr >>
+           opt: nom_opt      >>
+        (thunk, start, usize::max_value(), opt)
+    )
+);
+named!(nom_primary_slice4(S) -> (Thunk, usize, usize, Option<S>),
+    do_parse!(
+         thunk: nom_primary_expr >>
+                nom_open_sqr >>
+                nom_dotdot    >>
+           end: nom_usize >>
+                nom_clos_sqr >>
+           opt: nom_opt      >>
+        (thunk, usize::min_value(), end, opt)
+    )
+);
+named!(nom_primary_slice5(S) -> (Thunk, usize, usize, Option<S>),
+    do_parse!(
+         thunk: nom_primary_expr >>
+                nom_open_sqr >>
+                nom_dotdot    >>
+                nom_equal >>
+           end: nom_usize >>
+                nom_clos_sqr >>
+           opt: nom_opt      >>
+        (thunk, usize::min_value(), (end+1), opt)
+    )
+);
+named!(nom_primary_slice6(S) -> (Thunk, usize, usize, Option<S>),
+    do_parse!(
+         thunk: nom_primary_expr >>
+                nom_open_sqr >>
+                nom_dotdot    >>
+                nom_clos_sqr >>
+           opt: nom_opt      >>
+        (thunk, usize::min_value(), usize::max_value(), opt)
     )
 );
 named!(nom_primary_iterate(S) -> (Thunk, Thunk, Option<S>),
@@ -463,7 +521,12 @@ named!(nom_primary_expr(S) -> Thunk,
         nom_primary_literal | // should come before identifier
         nom_primary_builtins => { builtin_to_thunk } |
         nom_identifier => { |s: S| Thunk::Identifier(s.to_string()) } |
-        nom_primary_slice => { slice_to_thunk } |
+        nom_primary_slice1 => { slice_to_thunk } |
+        nom_primary_slice2 => { slice_to_thunk } |
+        nom_primary_slice3 => { slice_to_thunk } |
+        nom_primary_slice4 => { slice_to_thunk } |
+        nom_primary_slice5 => { slice_to_thunk } |
+        nom_primary_slice6 => { slice_to_thunk } |
         nom_primary_iterate => { iterate_to_thunk } |
         nom_primary_collection1 => { collection1_to_thunk } |
         nom_primary_collection2 => { collection2_to_thunk } |
