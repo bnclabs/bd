@@ -144,35 +144,85 @@ impl FnMut<(Json,)> for Thunk {
             },
 
             Slice(ref mut thunk, start, end, opt) => { // vector of one or more
-                let mut out = Vec::new();
+                let mut outs = Vec::new();
                 for item in thunk(doc)?.into_iter() {
                     let mut res = do_slice(*start, *end, item);
                     if *opt && res.is_err() { continue }
-                    out.append(&mut res?);
+                    outs.append(&mut res?);
                 }
-                Ok(out)
+                Ok(outs)
             },
 
             Iterate(ref mut thunk, ref mut thunks, opt) => {
-                let mut out = Vec::new();
+                let mut outs = Vec::new();
                 for item in thunk(doc)?.into_iter() {
                     let mut res = do_iterate(thunks, *opt, item);
                     if *opt && res.is_err() { continue }
-                    out.append(&mut res?);
+                    outs.append(&mut res?);
                 }
-                Ok(out)
+                Ok(outs)
             },
 
-            List(ref mut thunks, opt) => {
-                do_list(thunks, *opt, doc)
+            List(ref mut thunks, opt) => do_list(thunks, *opt, doc),
+            Dict(ref mut kv_thunks, opt) => do_dict(kv_thunks, *opt, doc),
+
+            Neg(ref mut thunk) => do_neg(thunk, doc),
+            Not(ref mut thunk) => do_not(thunk, doc),
+
+            Mult(ref mut _lthunk, ref mut _rthunk) => {
+                Ok(vec![])
             },
 
-            Dict(ref mut kv_thunks, opt) => {
-                do_dict(kv_thunks, *opt, doc)
+            Div(ref mut _lthunk, ref mut _rthunk) => {
+                Ok(vec![])
             },
 
-            Pipe(ref mut lhs_thunk, ref mut rhs_thunk) => {
-                do_pipe(lhs_thunk, rhs_thunk, doc)
+            Rem(ref mut _lthunk, ref mut _rthunk) => {
+                Ok(vec![])
+            },
+
+            Add(ref mut _lthunk, ref mut _rthunk) => {
+                Ok(vec![])
+            },
+
+            Sub(ref mut _lthunk, ref mut _rthunk) => {
+                Ok(vec![])
+            },
+
+            Compare(ref mut _lthunk, ref mut _rthunk) => {
+                Ok(vec![])
+            },
+
+            Shr(ref mut _lthunk, ref mut _rthunk) => {
+                Ok(vec![])
+            },
+
+            Shl(ref mut _lthunk, ref mut _rthunk) => {
+                Ok(vec![])
+            },
+
+            BitAnd(ref mut _lthunk, ref mut _rthunk) => {
+                Ok(vec![])
+            },
+
+            BitXor(ref mut _lthunk, ref mut _rthunk) => {
+                Ok(vec![])
+            },
+
+            BitOr(ref mut _lthunk, ref mut _rthunk) => {
+                Ok(vec![])
+            },
+
+            And(ref mut _lthunk, ref mut _rthunk) => {
+                Ok(vec![])
+            },
+
+            Or(ref mut _lthunk, ref mut _rthunk) => {
+                Ok(vec![])
+            },
+
+            Pipe(ref mut lthunk, ref mut rthunk) => {
+                do_pipe(lthunk, rthunk, doc)
             },
 
             _ => unreachable!(),
@@ -291,6 +341,30 @@ fn do_dict(kv_thunks: &mut Vec<(Thunk, Thunk)>, opt: bool, doc: Json)
         }
     }
     Ok(dicts)
+}
+
+fn do_neg(thunk: &mut Thunk, doc: Json) -> Result<Output> {
+    use json::Json::{Integer, Float};
+
+    let mut outs = thunk(doc)?;
+    for i in 0..outs.len() {
+        match outs[i] {
+            Integer(x) => outs[i] = Integer(-x),
+            Float(x) =>  outs[i] =Float(-x),
+            _ => (),
+        }
+    }
+    Ok(outs)
+}
+
+fn do_not(thunk: &mut Thunk, doc: Json) -> Result<Output> {
+    use json::Json::{Bool};
+
+    let mut outs = thunk(doc)?;
+    for i in 0..outs.len() {
+        match outs[i] { Bool(x) => outs[i] = Bool(!x), _ => () }
+    }
+    Ok(outs)
 }
 
 fn do_pipe(_lhs_thunk: &mut Thunk, _rhs_thunk: &mut Thunk, _doc: Json)
