@@ -523,7 +523,7 @@ impl Json {
     pub fn string(self) -> Result<String> {
         match self {
             Json::String(s) => Ok(s),
-            _ => Err(Error::NotMyType("not a string".to_string()))
+            _ => Err(Error::NotMyType("json not a string".to_string()))
         }
     }
 
@@ -618,7 +618,18 @@ impl Json {
         text.push('"');
     }
 
-    pub fn index(&self, i: usize) -> Result<&Json> {
+    pub fn index(self, off: usize) -> Result<Json> {
+        match self {
+            Json::Array(mut a) => if off < a.len() {
+                    Ok(a.remove(off))
+                } else {
+                    Err(Error::IndexUnbound(off, off))
+                },
+            _ => Err(Error::NotMyType("json is not array".to_string())),
+        }
+    }
+
+    pub fn index_ref(&self, i: usize) -> Result<&Json> {
         let a = self.array_ref()?;
         if i < a.len() { Ok(&a[i]) } else { Err(Error::IndexUnbound(i, i)) }
     }
@@ -629,16 +640,32 @@ impl Json {
         if i < a.len() { Ok(&mut a[i]) } else { Err(IndexUnbound(i, i)) }
     }
 
-    pub fn get<'a>(&self, key: &'a str) -> Result<&Json> {
-        let m = self.object_ref()?;
-        let off = search_by_key(m, key)?;
-        Ok(&m[off].1)
+    pub fn get<'a>(self, key: &'a str) -> Result<Json> {
+        match self {
+            Json::Object(mut obj) => {
+                let off = search_by_key(&obj, key)?;
+                Ok(obj.remove(off).1)
+            },
+            _ => Err(Error::NotMyType("json is not object".to_string()))
+        }
+    }
+
+    pub fn get_ref<'a>(&self, key: &'a str) -> Result<&Json> {
+        let obj = self.object_ref()?;
+        let off = search_by_key(obj, key)?;
+        Ok(&obj[off].1)
     }
 
     pub fn get_mut<'a>(&mut self, key: &'a str) -> Result<&mut Json> {
-        let m = self.object_mut()?;
-        let off = search_by_key(m, key)?;
-        Ok(&mut m[off].1)
+        let obj = self.object_mut()?;
+        let off = search_by_key(obj, key)?;
+        Ok(&mut obj[off].1)
+    }
+
+    pub fn upsert_key(&mut self, kv: KeyValue) {
+        let o = self.object_mut().unwrap();
+        let i = search_by_key(&o, &kv.0).unwrap_or_else(|e| e.key_missing_at());
+        o.insert(i, kv);
     }
 }
 
@@ -646,7 +673,7 @@ impl Index<usize> for Json {
     type Output=Json;
 
     fn index(&self, off: usize) -> &Json {
-        self.index(off).unwrap()
+        self.index_ref(off).unwrap()
     }
 }
 
@@ -660,7 +687,7 @@ impl<'a> Index<&'a str> for Json {
     type Output=Json;
 
     fn index(&self, key: &str) -> &Json {
-        self.get(key).unwrap()
+        self.get_ref(key).unwrap()
     }
 }
 
@@ -749,10 +776,10 @@ impl<'a> Mul for &'a Json {
         match (self, rhs) {
             (Integer(l), Integer(r)) => Integer(l*r),
             (Integer(l), Float(r)) => Float((*l as f64)*r),
-            (Integer(l), val) => val.mul(self),
+            (Integer(_), val) => val.mul(self),
             (Float(l), Float(r)) => Float(l*r),
             (Float(l), Integer(r)) => Float(l*(*r as f64)),
-            (Float(l), val) => val.mul(self),
+            (Float(_), val) => val.mul(self),
             (Null, _) => Null,
             (Bool(false), _) => Null,
             (Bool(true), val) => val.clone(),
@@ -778,14 +805,14 @@ impl<'a> Div for &'a Json {
         use json::Json::{Null,Integer,Float};
 
         match (self, rhs) {
-            (Integer(l), Integer(0)) => Null,
+            (Integer(_), Integer(0)) => Null,
             (Integer(l), Integer(r)) => Integer(l/r),
-            (Integer(l), Float(0.0)) => Null,
+            (Integer(_), Float(f)) if *f == 0.0 => Null,
             (Integer(l), Float(r)) => Float((*l as f64)/r),
-            (Integer(l), val) => val.div(self),
+            (Integer(_), val) => val.div(self),
             (Float(l), Float(r)) => Float(l/r),
             (Float(l), Integer(r)) => Float(l/(*r as f64)),
-            (Float(l), val) => val.div(self),
+            (Float(_), val) => val.div(self),
             (_, _) => Null,
         }
     }
@@ -798,14 +825,14 @@ impl<'a> Rem for &'a Json {
         use json::Json::{Null,Integer,Float};
 
         match (self, rhs) {
-            (Integer(l), Integer(0)) => Null,
+            (Integer(_), Integer(0)) => Null,
             (Integer(l), Integer(r)) => Integer(l%r),
-            (Integer(l), Float(0.0)) => Null,
+            (Integer(_), Float(f)) if *f == 0.0 => Null,
             (Integer(l), Float(r)) => Float((*l as f64)%r),
-            (Integer(l), val) => val.rem(self),
+            (Integer(_), val) => val.rem(self),
             (Float(l), Float(r)) => Float(l%r),
             (Float(l), Integer(r)) => Float(l%(*r as f64)),
-            (Float(l), val) => val.rem(self),
+            (Float(_), val) => val.rem(self),
             (_, _) => Null,
         }
     }
@@ -820,10 +847,10 @@ impl<'a> Add for &'a Json {
         match (self, rhs) {
             (Integer(l), Integer(r)) => Integer(l+r),
             (Integer(l), Float(r)) => Float((*l as f64)+r),
-            (Integer(l), val) => val.add(self),
+            (Integer(_), val) => val.add(self),
             (Float(l), Float(r)) => Float(l+r),
             (Float(l), Integer(r)) => Float(l+(*r as f64)),
-            (Float(l), val) => val.add(self),
+            (Float(_), val) => val.add(self),
             (S(l), S(r)) => {
                 let mut s = String::new(); s.push_str(l); s.push_str(r);
                 S(s)
@@ -848,10 +875,10 @@ impl<'a> Sub for &'a Json {
         match (self, rhs) {
             (Integer(l), Integer(r)) => Integer(l-r),
             (Integer(l), Float(r)) => Float((*l as f64)-r),
-            (Integer(l), val) => val.sub(self),
+            (Integer(_), val) => val.sub(self),
             (Float(l), Float(r)) => Float(l-r),
             (Float(l), Integer(r)) => Float(l-(*r as f64)),
-            (Float(l), val) => val.sub(self),
+            (Float(_), val) => val.sub(self),
             (_, _) => Null,
         }
     }

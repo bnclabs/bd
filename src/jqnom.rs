@@ -442,17 +442,65 @@ named!(nom_primary_slice6(S) -> (Thunk, usize, usize, Option<S>),
         (thunk, usize::min_value(), usize::max_value(), opt)
     )
 );
-named!(nom_primary_iterate(S) -> (Thunk, Thunk, Option<S>),
+named!(nom_iterate_item(S) -> Thunk,
+    map!(
+        do_parse!(
+        thunk: alt!(
+                    nom_expr |
+                    nom_identifier => { |s: S| {
+                        Thunk::IndexShortcut((&s).to_string(), None, false)
+                    }}
+               ) >>
+          opt: nom_opt >>
+        (thunk, opt)
+        ),
+        |(thunk, opt_outer)| {
+            match thunk {
+                Thunk::IndexShortcut(key, None, opt_inner) => {
+                    let off: Option<usize> = key.parse()
+                        .map(|off| Some(off))
+                        .unwrap_or(None);
+                    let opt = opt_outer.map_or(opt_inner, |_| true);
+                    Thunk::IndexShortcut(key, off, opt)
+                },
+                thunk => thunk
+            }
+        }
+    )
+);
+named!(nom_iterate_comma_item(S) -> Thunk,
+    do_parse!(
+               nom_comma >>
+        thunk: nom_iterate_item >>
+        (thunk)
+    )
+);
+named!(nom_iterate_items(S) -> Vec<Thunk>,
+    map!(
+        do_parse!(
+             item: nom_iterate_item >>
+            items: opt!(many1!(nom_iterate_comma_item)) >>
+            (item, items)
+        ),
+        |(item, items)| {
+            match items {
+                Some(mut items) => { items.insert(0, item); items },
+                None => vec![item],
+            }
+        }
+    )
+);
+named!(nom_primary_iterate(S) -> (Thunk, Vec<Thunk>, Option<S>),
     do_parse!(
          thunk: nom_primary_expr >>
                 nom_open_sqr  >>
-        thunks: nom_expr_list >>
+        thunks: nom_iterate_items >>
                 nom_clos_sqr  >>
            opt: nom_opt       >>
         (thunk, thunks, opt)
     )
 );
-named!(nom_primary_collection1(S) -> (Thunk, Option<S>),
+named!(nom_primary_collection1(S) -> (Vec<Thunk>, Option<S>),
     do_parse!(
                 nom_open_sqr  >>
         thunks: nom_expr_list >>
@@ -461,13 +509,43 @@ named!(nom_primary_collection1(S) -> (Thunk, Option<S>),
         (thunks, opt)
     )
 );
-named!(nom_primary_collection2(S) -> (Thunk, Option<S>),
+named!(nom_collection2_item(S) -> (Thunk, Thunk),
     do_parse!(
-                nom_open_brace  >>
-        thunks: nom_expr_list >>
-                nom_clos_brace  >>
-           opt: nom_opt       >>
-        (thunks, opt)
+        key: nom_expr >>
+             nom_colon >>
+        val: nom_expr >>
+        (key,val)
+    )
+);
+named!(nom_collection2_comma_item(S) -> (Thunk, Thunk),
+    do_parse!(
+               nom_comma >>
+        thunk: nom_collection2_item >>
+        (thunk)
+    )
+);
+named!(nom_collection2_items(S) -> Vec<(Thunk, Thunk)>,
+    map!(
+        do_parse!(
+             item: nom_collection2_item >>
+            items: opt!(many1!(nom_collection2_comma_item)) >>
+            (item, items)
+        ),
+        |(item, items)| {
+            match items {
+                Some(mut items) => { items.insert(0, item); items },
+                None => vec![item],
+            }
+        }
+    )
+);
+named!(nom_primary_collection2(S) -> (Vec<(Thunk, Thunk)>, Option<S>),
+    do_parse!(
+               nom_open_brace  >>
+        items: nom_collection2_items >>
+               nom_clos_brace  >>
+          opt: nom_opt       >>
+        (items, opt)
     )
 );
 
@@ -506,7 +584,7 @@ named!(nom_primary_literal(S) -> Thunk,
         nom_object => { |o| Thunk::Literal(o) }
     )
 );
-named!(nom_primary_builtins(S) -> (S, Thunk),
+named!(nom_primary_builtins(S) -> (S, Vec<Thunk>),
     do_parse!(
         funcname: nom_identifier >>
                   nom_open_paran >>
@@ -520,7 +598,6 @@ named!(nom_primary_expr(S) -> Thunk,
     alt!(
         nom_primary_literal | // should come before identifier
         nom_primary_builtins => { builtin_to_thunk } |
-        nom_identifier => { |s: S| Thunk::Identifier(s.to_string()) } |
         nom_primary_slice1 => { slice_to_thunk } |
         nom_primary_slice2 => { slice_to_thunk } |
         nom_primary_slice3 => { slice_to_thunk } |
@@ -546,7 +623,7 @@ named!(nom_comma_expr(S) -> Thunk,
         (thunk)
     )
 );
-named!(nom_expr_list(S) -> Thunk,
+named!(nom_expr_list(S) -> Vec<Thunk>,
     map!(
         do_parse!(
              thunk:  nom_expr                      >>
@@ -554,11 +631,10 @@ named!(nom_expr_list(S) -> Thunk,
             (thunk, thunks)
         ),
         |(thunk, thunks)| {
-            let thunks = match thunks {
+            match thunks {
                 Some(mut thunks) => { thunks.insert(0, thunk); thunks },
                 None => vec![thunk]
-            };
-            Thunk::Thunks(thunks)
+            }
         }
     )
 );
@@ -573,15 +649,14 @@ fn nom_empty_program(text: S) -> nom::IResult<S, Thunk> {
 }
 named!(nom_program(S) -> Thunk,
     ws!(alt!(
-        nom_expr_list |
         nom_expr |
         nom_empty_program // should alway be last.
     ))
 );
 
 
-fn builtin_to_thunk((funcname, args): (S, Thunk)) -> Thunk {
-    Thunk::Builtin(funcname.to_string(), Box::new(args))
+fn builtin_to_thunk((funcname, args): (S, Vec<Thunk>)) -> Thunk {
+    Thunk::Builtin(funcname.to_string(), args)
 }
 
 fn index_short_to_thunk((key, opt): (Json, Option<S>)) -> Thunk {
@@ -599,20 +674,17 @@ fn slice_to_thunk((thunk, start, end, opt): (Thunk, usize, usize, Option<S>))
     Thunk::Slice(Box::new(thunk), start, end, opt.map_or(false, |_| true))
 }
 
-fn iterate_to_thunk((thunk, thunks, opt): (Thunk, Thunk, Option<S>))
-    -> Thunk
-{
-    Thunk::Iterate(
-        Box::new(thunk), Box::new(thunks), opt.map_or(false, |_| true)
-    )
+fn iterate_to_thunk((thunk, thunks, opt): (Thunk, Vec<Thunk>, Option<S>)) -> Thunk {
+    let opt = opt.map_or(false, |_| true);
+    Thunk::Iterate(Box::new(thunk), thunks, opt)
 }
 
-fn collection1_to_thunk((thunks, opt): (Thunk, Option<S>)) -> Thunk {
-    Thunk::List(Box::new(thunks), opt.map_or(false, |_| true))
+fn collection1_to_thunk((thunks, opt): (Vec<Thunk>, Option<S>)) -> Thunk {
+    Thunk::List(thunks, opt.map_or(false, |_| true))
 }
 
-fn collection2_to_thunk((thunks, opt): (Thunk, Option<S>)) -> Thunk {
-    Thunk::Dict(Box::new(thunks), opt.map_or(false, |_| true))
+fn collection2_to_thunk((items, opt): (Vec<(Thunk,Thunk)>, Option<S>)) -> Thunk {
+    Thunk::Dict(items, opt.map_or(false, |_| true))
 }
 
 

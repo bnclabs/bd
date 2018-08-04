@@ -9,43 +9,15 @@ use jqnom::parse_program_nom;
 
 type Output = Vec<Json>;
 
+
 pub type Result<T> = result::Result<T,Error>;
-
-    //fn slice(self, start: usize, end: usize) -> Result<Output> {
-    //    use jq::Output::{One, Many};
-    //    match self {
-    //        One(scalar) => Output::slice_one(scalar, start, end),
-    //        Many(vector) => Output::slice_many(vector, start, end),
-    //    }
-    //}
-
-    //fn slice_one(doc: Json, start: usize, end: usize) -> Result<Output> {
-    //    match doc.slice(start, end) {
-    //        Some(arr) => Ok(Output::One(arr)),
-    //        None => Err(Error::Op(format!("cannot slice")))
-    //    }
-    //}
-
-    //fn slice_many(docs: Vec<Json>, start: usize, end: usize)
-    //    -> Result<Output>
-    //{
-    //    let mut outs = Vec::new();
-
-    //    for doc in docs {
-    //        match doc.slice(start, end) {
-    //            Some(arr) => outs.push(arr),
-    //            None => return Err(Error::Op(format!("can't slice")))
-    //        }
-    //    }
-    //    Ok(Output::Many(outs))
-    //}
 
 
 #[derive(Debug,Eq,PartialEq)]
 pub enum Error {
     Parse(String),
     ParseJson(json::Error),
-    Op(String),
+    Op(Option<json::Error>, String),
 }
 
 impl fmt::Display for Error {
@@ -55,7 +27,8 @@ impl fmt::Display for Error {
         match self {
             Parse(s) => write!(f, "{}", s),
             ParseJson(err) => write!(f, "{}", err),
-            Op(s) => write!(f, "{}", s),
+            Op(Some(err), s) => write!(f, "{} due to {}", s, err),
+            Op(None, s) => write!(f, "{}", s),
         }
     }
 }
@@ -66,7 +39,17 @@ impl error::Error for Error {
 
 impl From<json::Error> for Error {
     fn from(err: json::Error) -> Error {
-        Error::ParseJson(err)
+        use json::Error::{Parse, ParseFloat, ParseInt, NotMyType, KeyMissing};
+        use json::Error::{IndexUnbound};
+
+        match err {
+            e@Parse(_) | e@ParseFloat(_,_) | e@ParseInt(_,_) => {
+                Error::ParseJson(e)
+            },
+            e@NotMyType(_) | e@KeyMissing(_,_) | e@IndexUnbound(_, _) => {
+                Error::Op(Some(e), "json op error".to_string())
+            },
+        }
     }
 }
 
@@ -104,33 +87,30 @@ pub enum Thunk {
     Identity,
     Recurse,
     Literal(Json),
-    Identifier(String),
     IndexShortcut(String, Option<usize>, bool),
     Slice(Box<Thunk>, usize, usize, bool),
-    Iterate(Box<Thunk>, Box<Thunk>, bool),
-    List(Box<Thunk>, bool),
-    Dict(Box<Thunk>, bool),
+    Iterate(Box<Thunk>, Vec<Thunk>, bool),
+    List(Vec<Thunk>, bool),
+    Dict(Vec<(Thunk, Thunk)>, bool),
+    // Operations in decreasing precedance
     Neg(Box<Thunk>),
     Not(Box<Thunk>),
-    // Operations in increasing precedance
-    Pipe(Box<Thunk>, Box<Thunk>),
-    Or(Box<Thunk>, Box<Thunk>),
-    And(Box<Thunk>, Box<Thunk>),
-    Compare(Box<Thunk>, Box<Thunk>),
-    BitOr(Box<Thunk>, Box<Thunk>),
-    BitXor(Box<Thunk>, Box<Thunk>),
-    BitAnd(Box<Thunk>, Box<Thunk>),
-    Shr(Box<Thunk>, Box<Thunk>),
-    Shl(Box<Thunk>, Box<Thunk>),
-    Add(Box<Thunk>, Box<Thunk>),
-    Sub(Box<Thunk>, Box<Thunk>),
     Mult(Box<Thunk>, Box<Thunk>),
     Div(Box<Thunk>, Box<Thunk>),
     Rem(Box<Thunk>, Box<Thunk>),
+    Add(Box<Thunk>, Box<Thunk>),
+    Sub(Box<Thunk>, Box<Thunk>),
+    Compare(Box<Thunk>, Box<Thunk>),
+    Shr(Box<Thunk>, Box<Thunk>),
+    Shl(Box<Thunk>, Box<Thunk>),
+    BitAnd(Box<Thunk>, Box<Thunk>),
+    BitXor(Box<Thunk>, Box<Thunk>),
+    BitOr(Box<Thunk>, Box<Thunk>),
+    And(Box<Thunk>, Box<Thunk>),
+    Or(Box<Thunk>, Box<Thunk>),
+    Pipe(Box<Thunk>, Box<Thunk>),
     // Builtins
-    Builtin(String, Box<Thunk>),
-    // comma separated list of expression thunks
-    Thunks(Vec<Thunk>),
+    Builtin(String, Vec<Thunk>),
 }
 
 impl FnMut<(Json,)> for Thunk {
@@ -139,31 +119,63 @@ impl FnMut<(Json,)> for Thunk {
 
         let doc = args.0;
         match self {
-            Empty => Ok(vec![doc]),
-            Identity => Ok(vec![doc]),
-            Literal(literal) => Ok(vec![literal.clone()]),
-
-            IndexShortcut(key, off, opt) => {
-                do_index_shortcut(key, *off, *opt, doc)
+            Empty => { // vector of single item
+                Ok(vec![doc])
             },
 
-            Slice(ref mut thunk, start, end, opt) => {
-                do_slice(thunk, *start, *end, *opt, doc)
+            Identity => { // vector of single item
+                Ok(vec![doc])
+            },
+
+            Recurse => { // vector of one or more items
+                let mut list = Vec::new();
+                do_recurse(&mut list, doc);
+                Ok(list)
+            },
+
+            Literal(literal) => { // vecot of single item
+                Ok(vec![literal.clone()])
+            },
+
+            IndexShortcut(key, off, opt) => { // vector of single item
+                let res = do_index_shortcut(key, *off, doc);
+                if *opt && res.is_err() { return Ok(vec![]) }
+                Ok(vec![res.unwrap()])
+            },
+
+            Slice(ref mut thunk, start, end, opt) => { // vector of one or more
+                let mut out = Vec::new();
+                for item in thunk(doc)?.into_iter() {
+                    let mut res = do_slice(*start, *end, item);
+                    if *opt && res.is_err() { continue }
+                    out.append(&mut res?);
+                }
+                Ok(out)
             },
 
             Iterate(ref mut thunk, ref mut thunks, opt) => {
-                do_iterate(thunk, thunks, *opt, doc)
+                let mut out = Vec::new();
+                for item in thunk(doc)?.into_iter() {
+                    let mut res = do_iterate(thunks, *opt, item);
+                    if *opt && res.is_err() { continue }
+                    out.append(&mut res?);
+                }
+                Ok(out)
             },
 
             List(ref mut thunks, opt) => {
                 do_list(thunks, *opt, doc)
             },
 
+            Dict(ref mut kv_thunks, opt) => {
+                do_dict(kv_thunks, *opt, doc)
+            },
+
             Pipe(ref mut lhs_thunk, ref mut rhs_thunk) => {
                 do_pipe(lhs_thunk, rhs_thunk, doc)
             },
 
-            _ => unimplemented!(),
+            _ => unreachable!(),
         }
     }
 }
@@ -176,45 +188,109 @@ impl FnOnce<(Json,)> for Thunk {
     }
 }
 
-fn do_index_shortcut(key: &String, off: Option<usize>, opt: bool, doc: Json)
-    -> Result<Output>
-{
-    //use json::Json::{Object, Array};
+fn do_recurse(list: &mut Vec<Json>, doc: Json) {
+    use json::Json::{Null, Bool, Integer, Float, Array, Object, String as S};
 
-    ////println!("Thunk::IndexKey {:?} {}", doc, key);
-    //match doc {
-    //    Array(a) => index_array(a, &key, off, opt),
-    //    Object(m) => index_object(m, &key, opt),
-    //    _ => match opt {
-    //        true => Ok(Output::One(Json::Null)),
-    //        false => Err(Error::Op(format!("not an object {:?}", doc))),
-    //    }
-    //}
-    unimplemented!()
+    match doc {
+        val@Null | val@Bool(_) | val@Integer(_) |
+        val@Float(_) | val@S(_) => list.push(val),
+        Array(val) => {
+            list.push(Array(val.clone()));
+            val.into_iter().for_each(|item| do_recurse(list, item))
+        },
+        Object(val) => {
+            list.push(Object(val.clone()));
+            val.into_iter().for_each(|item| do_recurse(list, item.1))
+        },
+    }
 }
 
-fn do_slice(
-    thunk: &mut Thunk, start: usize, end: usize, opt: bool, doc: Json)
-    -> Result<Output>
+fn do_index_shortcut(key: &String, off: Option<usize>, doc: Json)
+    -> Result<Json>
 {
-    //match (opt, thunk(doc)?.slice(start, end)) {
-    //    (true, Err(_)) => Ok(Output::One(Json::Null)),
-    //    (_, res) => res,
-    //}
-    unimplemented!()
+    use json::Json::{Object, Array};
+
+    Ok(match (doc, off) {
+        (doc@Object(_), _) => doc.get(key)?,
+        (doc@Array(_), Some(off)) => doc.index(off)?,
+        (_, _) => {
+            return Err(Error::Op(None, "json not an object".to_string()))
+        },
+    })
 }
 
-fn do_iterate(
-    _thunk: &mut Thunk, _thunks: &mut Thunk, _opt: bool, _doc: Json)
-    -> Result<Output>
-{
-    unimplemented!()
+fn do_slice(start: usize, end: usize, doc: Json) -> Result<Output> {
+    use json::Json::{Array};
+
+    match doc {
+        Array(arr) => {
+            let end = if end == usize::max_value() { arr.len() } else { end };
+            let mut res = Vec::new();
+            arr[start..end].iter().for_each(|item| res.push(item.clone()));
+            Ok(res)
+        }
+        _ => return Err(Error::Op(None, "json not an array".to_string()))
+    }
 }
 
-fn do_list(_thunks: &mut Thunk, _opt: bool, _doc: Json)
+fn do_iterate(thunks: &mut Vec<Thunk>, opt: bool, doc: Json) -> Result<Output> {
+    let mut out = Vec::new();
+    for thunk in thunks.iter_mut() {
+        let mut res = thunk(doc.clone());
+        if opt && res.is_err() { continue }
+        out.append(&mut res?)
+    }
+    Ok(out)
+}
+
+fn do_list(thunks: &mut Vec<Thunk>, opt: bool, doc: Json) -> Result<Output> {
+    let mut out = Vec::new();
+    for thunk in thunks.iter_mut() {
+        let mut res = thunk(doc.clone());
+        if opt && res.is_err() { continue }
+        out.append(&mut res?)
+    }
+    Ok(vec![Json::Array(out)])
+}
+
+fn do_dict(kv_thunks: &mut Vec<(Thunk, Thunk)>, opt: bool, doc: Json)
     -> Result<Output>
 {
-    unimplemented!()
+    use json::Json::{String as S};
+
+    let mut dicts: Vec<Json> = vec![Json::Object(vec![])];
+
+    let insert_dicts = |dicts: &mut Vec<Json>, kv: &KeyValue| {
+        dicts.iter_mut().for_each(|dict| { dict.upsert_key(kv.clone()); });
+    };
+
+    for kv_thunk in kv_thunks.iter_mut() {
+        let mut key_res = kv_thunk.0(doc.clone());
+        if opt && key_res.is_err() { continue }
+
+        let mut val_res = kv_thunk.1(doc.clone());
+        if opt && val_res.is_err() { continue }
+
+        let key_res = key_res?;
+        let val_res = val_res?;
+        for (i, key) in key_res.into_iter().enumerate() {
+            let mut kv = match key {
+                S(s) => KeyValue(s, Json::Null),
+                _ => continue
+            };
+            for (j, val) in val_res.clone().into_iter().enumerate() {
+                kv.1 = val;
+                if i == 0 && j == 0 {
+                    insert_dicts(&mut dicts, &kv);
+                    continue
+                }
+                let mut next_dicts = dicts.clone();
+                insert_dicts(&mut next_dicts, &kv);
+                dicts.append(&mut next_dicts);
+            }
+        }
+    }
+    Ok(dicts)
 }
 
 fn do_pipe(_lhs_thunk: &mut Thunk, _rhs_thunk: &mut Thunk, _doc: Json)
@@ -271,7 +347,7 @@ mod test {
     #[test]
     fn test_jq_empty() {
         match parse("").unwrap() {
-            mut thunk @ box Thunk::Empty => {
+            mut thunk@box Thunk::Empty => {
                 let mut out = thunk(Json::String("hello".to_string())).unwrap();
                 assert_eq!(Output::One(Json::String("hello".to_string())), out);
             },
@@ -284,7 +360,7 @@ mod test {
     #[test]
     fn test_jq_empty_ws() {
         match parse("   ").unwrap() {
-            mut thunk @ box Thunk::Empty => {
+            mut thunk@box Thunk::Empty => {
                 let mut out = thunk(Json::String("hello".to_string())).unwrap();
                 assert_eq!(Output::One(Json::String("hello".to_string())), out);
             },
