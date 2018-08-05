@@ -667,6 +667,7 @@ impl Json {
         let i = search_by_key(&o, &kv.0).unwrap_or_else(|e| e.key_missing_at());
         o.insert(i, kv);
     }
+
 }
 
 impl Index<usize> for Json {
@@ -751,6 +752,7 @@ impl<'a> Neg for &'a Json {
     fn neg(self) -> Json {
         match self {
             Json::Integer(n) => Json::Integer(-n),
+            Json::Float(n) => Json::Float(-n),
             _ => Json::Null,
         }
     }
@@ -783,9 +785,16 @@ impl<'a> Mul for &'a Json {
             (Null, _) => Null,
             (Bool(false), _) => Null,
             (Bool(true), val) => val.clone(),
+            (S(_), Integer(0)) => Null,
             (S(s), Integer(n)) => S(s.repeat(*n as usize)),
             (S(_), _) => Null,
             (Object(o), Bool(true)) => Object(o.clone()),
+            (Object(this), Object(other)) => {
+                let mut obj = Vec::new();
+                obj = mixin_object(obj, this.to_vec());
+                obj = mixin_object(obj, other.to_vec());
+                Json::Object(obj)
+            },
             (Object(_), _) => Null,
             (Array(a), Integer(n)) => {
                 let mut v = vec![];
@@ -802,7 +811,7 @@ impl<'a> Div for &'a Json {
     type Output=Json;
 
     fn div(self, rhs: &Json) -> Json {
-        use json::Json::{Null,Integer,Float};
+        use json::Json::{Null,Integer,Float,String as S};
 
         match (self, rhs) {
             (Integer(_), Integer(0)) => Null,
@@ -813,6 +822,9 @@ impl<'a> Div for &'a Json {
             (Float(l), Float(r)) => Float(l/r),
             (Float(l), Integer(r)) => Float(l/(*r as f64)),
             (Float(_), val) => val.div(self),
+            (S(s), S(patt)) => {
+                Json::Array(s.split(patt).map(|s| S(s.to_string())).collect())
+            },
             (_, _) => Null,
         }
     }
@@ -842,7 +854,7 @@ impl<'a> Add for &'a Json {
     type Output=Json;
 
     fn add(self, rhs: &Json) -> Json {
-        use json::Json::{Null,Integer,Float,Array, String as S};
+        use json::Json::{Null,Integer,Float,Array,Object, String as S};
 
         match (self, rhs) {
             (Integer(l), Integer(r)) => Integer(l+r),
@@ -860,6 +872,12 @@ impl<'a> Add for &'a Json {
                 a.extend_from_slice(l);
                 a.extend_from_slice(r);
                 Array(a)
+            }
+            (Object(l), Object(r)) => {
+                let mut obj = Vec::new();
+                obj = merge_object(obj, l.to_vec());
+                obj = merge_object(obj, r.to_vec());
+                Json::Object(obj)
             }
             (_, _) => Null,
         }
@@ -986,6 +1004,38 @@ pub fn search_by_key(obj: &Vec<KeyValue>, key: &str) -> Result<usize> {
     }
 }
 
+fn merge_object(mut this: Vec<KeyValue>, other: Vec<KeyValue>)
+    -> Vec<KeyValue>
+{
+    for o in other.into_iter() {
+        let i = search_by_key(&this, &o.0)
+                .unwrap_or_else(|e| e.key_missing_at());
+        this.insert(i, o)
+    }
+    this
+}
+
+fn mixin_object(mut this: Vec<KeyValue>, other: Vec<KeyValue>)
+    -> Vec<KeyValue>
+{
+    use json::Json::{Object};
+    use json::Error::{KeyMissing};
+
+    for o in other.into_iter() {
+        match search_by_key(&this, &o.0) {
+            Ok(i) => match (&this[i].1, &o.1) {
+                (Object(val1), Object(val2)) => {
+                    this = mixin_object(this, val1.to_vec());
+                    this = mixin_object(this, val2.to_vec());
+                },
+                _ => this.insert(i, o.clone())
+            },
+            Err(KeyMissing(i, _)) => this.insert(i, o.clone()),
+            _ => unreachable!(),
+        }
+    }
+    this
+}
 
 pub trait Value {
     fn value(self) -> Json;

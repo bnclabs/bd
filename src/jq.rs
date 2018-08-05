@@ -169,25 +169,12 @@ impl FnMut<(Json,)> for Thunk {
             Neg(ref mut thunk) => do_neg(thunk, doc),
             Not(ref mut thunk) => do_not(thunk, doc),
 
-            Mult(ref mut _lthunk, ref mut _rthunk) => {
-                Ok(vec![])
-            },
+            Mult(ref mut lthunk, ref mut rthunk) => do_mult(lthunk, rthunk, doc),
+            Div(ref mut lthunk, ref mut rthunk) => do_div(lthunk, rthunk, doc),
+            Rem(ref mut lthunk, ref mut rthunk) => do_rem(lthunk, rthunk, doc),
 
-            Div(ref mut _lthunk, ref mut _rthunk) => {
-                Ok(vec![])
-            },
-
-            Rem(ref mut _lthunk, ref mut _rthunk) => {
-                Ok(vec![])
-            },
-
-            Add(ref mut _lthunk, ref mut _rthunk) => {
-                Ok(vec![])
-            },
-
-            Sub(ref mut _lthunk, ref mut _rthunk) => {
-                Ok(vec![])
-            },
+            Add(ref mut lthunk, ref mut rthunk) => do_add(lthunk, rthunk, doc),
+            Sub(ref mut lthunk, ref mut rthunk) => do_sub(lthunk, rthunk, doc),
 
             Compare(ref mut _lthunk, ref mut _rthunk) => {
                 Ok(vec![])
@@ -344,27 +331,46 @@ fn do_dict(kv_thunks: &mut Vec<(Thunk, Thunk)>, opt: bool, doc: Json)
 }
 
 fn do_neg(thunk: &mut Thunk, doc: Json) -> Result<Output> {
-    use json::Json::{Integer, Float};
-
-    let mut outs = thunk(doc)?;
-    for i in 0..outs.len() {
-        match outs[i] {
-            Integer(x) => outs[i] = Integer(-x),
-            Float(x) =>  outs[i] =Float(-x),
-            _ => (),
-        }
-    }
-    Ok(outs)
+    Ok(thunk(doc)?.into_iter().map(|x| -(&x)).collect())
 }
 
 fn do_not(thunk: &mut Thunk, doc: Json) -> Result<Output> {
-    use json::Json::{Bool};
+    Ok(thunk(doc)?.into_iter().map(|x| !(&x)).collect())
+}
 
-    let mut outs = thunk(doc)?;
-    for i in 0..outs.len() {
-        match outs[i] { Bool(x) => outs[i] = Bool(!x), _ => () }
-    }
-    Ok(outs)
+fn do_mult(lthunk: &mut Thunk, rthunk: &mut Thunk, doc:Json) -> Result<Output> {
+    Ok(lthunk(doc.clone())?.iter()
+                   .zip(rthunk(doc)?.iter())
+                   .map(|(x,y)| x*y).collect()
+    )
+}
+
+fn do_div(lthunk: &mut Thunk, rthunk: &mut Thunk, doc:Json) -> Result<Output> {
+    Ok(lthunk(doc.clone())?.iter()
+                   .zip(rthunk(doc)?.iter())
+                   .map(|(x,y)| x/y).collect()
+    )
+}
+
+fn do_rem(lthunk: &mut Thunk, rthunk: &mut Thunk, doc:Json) -> Result<Output> {
+    Ok(lthunk(doc.clone())?.iter()
+                   .zip(rthunk(doc)?.iter())
+                   .map(|(x,y)| x%y).collect()
+    )
+}
+
+fn do_add(lthunk: &mut Thunk, rthunk: &mut Thunk, doc:Json) -> Result<Output> {
+    Ok(lthunk(doc.clone())?.iter()
+                   .zip(rthunk(doc)?.iter())
+                   .map(|(x,y)| x+y).collect()
+    )
+}
+
+fn do_sub(lthunk: &mut Thunk, rthunk: &mut Thunk, doc:Json) -> Result<Output> {
+    Ok(lthunk(doc.clone())?.iter()
+                   .zip(rthunk(doc)?.iter())
+                   .map(|(x,y)| x-y).collect()
+    )
 }
 
 fn do_pipe(_lhs_thunk: &mut Thunk, _rhs_thunk: &mut Thunk, _doc: Json)
