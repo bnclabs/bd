@@ -188,39 +188,18 @@ impl FnMut<(Json,)> for Thunk {
             Gt(ref mut lthunk, ref mut rthunk) => do_gt(lthunk, rthunk, doc),
             Ge(ref mut lthunk, ref mut rthunk) => do_ge(lthunk, rthunk, doc),
 
-            Shr(ref mut _lthunk, ref mut _rthunk) => {
-                Ok(vec![])
-            },
+            Shr(ref mut ltnk, ref mut rtnk) => do_shr(ltnk, rtnk, doc),
+            Shl(ref mut ltnk, ref mut rtnk) => do_shl(ltnk, rtnk, doc),
+            BitAnd(ref mut ltnk, ref mut rtnk) => do_bitand(ltnk, rtnk, doc),
+            BitXor(ref mut ltnk, ref mut rtnk) => do_bitxor(ltnk, rtnk, doc),
+            BitOr(ref mut ltnk, ref mut rtnk) => do_bitor(ltnk, rtnk, doc),
 
-            Shl(ref mut _lthunk, ref mut _rthunk) => {
-                Ok(vec![])
-            },
+            And(ref mut ltnk, ref mut rtnk) => do_and(ltnk, rtnk, doc),
+            Or(ref mut ltnk, ref mut rtnk) => do_or(ltnk, rtnk, doc),
 
-            BitAnd(ref mut _lthunk, ref mut _rthunk) => {
-                Ok(vec![])
-            },
+            Pipe(ref mut lthunk, ref mut rthunk) => do_pipe(lthunk, rthunk, doc),
 
-            BitXor(ref mut _lthunk, ref mut _rthunk) => {
-                Ok(vec![])
-            },
-
-            BitOr(ref mut _lthunk, ref mut _rthunk) => {
-                Ok(vec![])
-            },
-
-            And(ref mut _lthunk, ref mut _rthunk) => {
-                Ok(vec![])
-            },
-
-            Or(ref mut _lthunk, ref mut _rthunk) => {
-                Ok(vec![])
-            },
-
-            Pipe(ref mut lthunk, ref mut rthunk) => {
-                do_pipe(lthunk, rthunk, doc)
-            },
-
-            _ => unreachable!(),
+            Builtin(_,_) => unreachable!(),
         }
     }
 }
@@ -441,11 +420,63 @@ fn do_ge(lthunk: &mut Thunk, rthunk: &mut Thunk, doc: Json) -> Result<Output> {
     )
 }
 
+fn do_shr(lthunk: &mut Thunk, rthunk: &mut Thunk, doc: Json) -> Result<Output> {
+    Ok(lthunk(doc.clone())?.iter()
+                   .zip(rthunk(doc)?.iter())
+                   .map(|(x,y)| x>>y).collect()
+    )
+}
 
-fn do_pipe(_lhs_thunk: &mut Thunk, _rhs_thunk: &mut Thunk, _doc: Json)
-    -> Result<Output>
-{
-    unimplemented!()
+fn do_shl(lthunk: &mut Thunk, rthunk: &mut Thunk, doc: Json) -> Result<Output> {
+    Ok(lthunk(doc.clone())?.iter()
+                   .zip(rthunk(doc)?.iter())
+                   .map(|(x,y)| x<<y).collect()
+    )
+}
+
+fn do_bitand(lthunk: &mut Thunk, rthunk: &mut Thunk, doc: Json) -> Result<Output> {
+    Ok(lthunk(doc.clone())?.iter()
+                   .zip(rthunk(doc)?.iter())
+                   .map(|(x,y)| x&y).collect()
+    )
+}
+
+fn do_bitxor(lthunk: &mut Thunk, rthunk: &mut Thunk, doc: Json) -> Result<Output> {
+    Ok(lthunk(doc.clone())?.iter()
+                   .zip(rthunk(doc)?.iter())
+                   .map(|(x,y)| x^y).collect()
+    )
+}
+
+fn do_bitor(lthunk: &mut Thunk, rthunk: &mut Thunk, doc: Json) -> Result<Output> {
+    Ok(lthunk(doc.clone())?.iter()
+                   .zip(rthunk(doc)?.iter())
+                   .map(|(x,y)| x|y).collect()
+    )
+}
+
+fn do_and(lthunk: &mut Thunk, rthunk: &mut Thunk, doc: Json) -> Result<Output> {
+    Ok(lthunk(doc.clone())?.iter()
+                   .zip(rthunk(doc)?.iter())
+                   .map(|(x,y)| x.and(y)).collect()
+    )
+}
+
+fn do_or(lthunk: &mut Thunk, rthunk: &mut Thunk, doc: Json) -> Result<Output> {
+    Ok(lthunk(doc.clone())?.iter()
+                   .zip(rthunk(doc)?.iter())
+                   .map(|(x,y)| x.or(y)).collect()
+    )
+}
+
+
+fn do_pipe(lthunk: &mut Thunk, rthunk: &mut Thunk, doc: Json) -> Result<Output> {
+    let mut outs = Vec::new();
+    for item in lthunk(doc)? {
+        let mut out = rthunk(item)?;
+        outs.append(&mut out)
+    }
+    Ok(outs)
 }
 
 //fn index_array(a: Vec<Json>, key: &str, off: Option<usize>, opt: bool)

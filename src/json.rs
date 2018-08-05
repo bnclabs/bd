@@ -670,6 +670,21 @@ impl Json {
         o.insert(i, kv);
     }
 
+    pub fn and(&self, other: &Json) -> Json {
+        use json::Json::{Null, Bool};
+
+        let lhs = match self { Null | Bool(false) => false, _ => true };
+        let rhs = match other { Null | Bool(false) => false, _ => true };
+        Bool(lhs & rhs)
+    }
+
+    pub fn or(&self, other: &Json) -> Json {
+        use json::Json::{Null, Bool};
+
+        let lhs = match self { Null | Bool(false) => false, _ => true };
+        let rhs = match other { Null | Bool(false) => false, _ => true };
+        Bool(lhs | rhs)
+    }
 }
 
 impl Index<usize> for Json {
@@ -904,23 +919,23 @@ impl<'a> Sub for &'a Json {
     }
 }
 
-impl<'a> Shl for &'a Json {
-    type Output=Json;
-
-    fn shl(self, rhs: &Json) -> Json {
-        match (self, rhs) {
-            (Json::Integer(l), Json::Integer(r)) => Json::Integer(l<<r),
-            (_, _) => Json::Null,
-        }
-    }
-}
-
 impl<'a> Shr for &'a Json {
     type Output=Json;
 
     fn shr(self, rhs: &Json) -> Json {
         match (self, rhs) {
             (Json::Integer(l), Json::Integer(r)) => Json::Integer(l>>r),
+            (_, _) => Json::Null,
+        }
+    }
+}
+
+impl<'a> Shl for &'a Json {
+    type Output=Json;
+
+    fn shl(self, rhs: &Json) -> Json {
+        match (self, rhs) {
+            (Json::Integer(l), Json::Integer(r)) => Json::Integer(l<<r),
             (_, _) => Json::Null,
         }
     }
