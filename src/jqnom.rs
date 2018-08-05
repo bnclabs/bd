@@ -180,12 +180,12 @@ named!(nom_compare(S) -> Thunk,
         |(mut lhs, op_thunks)| {
             for (op, rhs) in op_thunks {
                 lhs = match *op {
-                    "==" => Thunk::Compare(Box::new(lhs), Box::new(rhs)),
-                    "!=" => Thunk::Compare(Box::new(lhs), Box::new(rhs)),
-                    "<" => Thunk::Compare(Box::new(lhs), Box::new(rhs)),
-                    "<=" => Thunk::Compare(Box::new(lhs), Box::new(rhs)),
-                    ">" => Thunk::Compare(Box::new(lhs), Box::new(rhs)),
-                    ">=" => Thunk::Compare(Box::new(lhs), Box::new(rhs)),
+                    "==" => Thunk::Eq(Box::new(lhs), Box::new(rhs)),
+                    "!=" => Thunk::Ne(Box::new(lhs), Box::new(rhs)),
+                    "<" => Thunk::Lt(Box::new(lhs), Box::new(rhs)),
+                    "<=" => Thunk::Le(Box::new(lhs), Box::new(rhs)),
+                    ">" => Thunk::Gt(Box::new(lhs), Box::new(rhs)),
+                    ">=" => Thunk::Ge(Box::new(lhs), Box::new(rhs)),
                     _ => unreachable!(),
                 }
             }

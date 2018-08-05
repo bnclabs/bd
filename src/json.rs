@@ -13,6 +13,8 @@ include!("./json.rs.lookup");
 
 pub type Result<T> = result::Result<T,Error>;
 
+// TODO: use Json::String as S
+
 
 #[derive(Debug,Eq,PartialEq)]
 pub enum Error {
@@ -500,7 +502,7 @@ impl From<String> for KeyValue {
     }
 }
 
-#[derive(Clone,Debug,PartialEq)]
+#[derive(Clone,Debug,PartialEq,PartialOrd)]
 pub enum Json {
     Null,
     Bool(bool),

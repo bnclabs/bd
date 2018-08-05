@@ -100,7 +100,12 @@ pub enum Thunk {
     Rem(Box<Thunk>, Box<Thunk>),
     Add(Box<Thunk>, Box<Thunk>),
     Sub(Box<Thunk>, Box<Thunk>),
-    Compare(Box<Thunk>, Box<Thunk>),
+    Eq(Box<Thunk>, Box<Thunk>),
+    Ne(Box<Thunk>, Box<Thunk>),
+    Lt(Box<Thunk>, Box<Thunk>),
+    Le(Box<Thunk>, Box<Thunk>),
+    Gt(Box<Thunk>, Box<Thunk>),
+    Ge(Box<Thunk>, Box<Thunk>),
     Shr(Box<Thunk>, Box<Thunk>),
     Shl(Box<Thunk>, Box<Thunk>),
     BitAnd(Box<Thunk>, Box<Thunk>),
@@ -176,9 +181,12 @@ impl FnMut<(Json,)> for Thunk {
             Add(ref mut lthunk, ref mut rthunk) => do_add(lthunk, rthunk, doc),
             Sub(ref mut lthunk, ref mut rthunk) => do_sub(lthunk, rthunk, doc),
 
-            Compare(ref mut _lthunk, ref mut _rthunk) => {
-                Ok(vec![])
-            },
+            Eq(ref mut lthunk, ref mut rthunk) => do_eq(lthunk, rthunk, doc),
+            Ne(ref mut lthunk, ref mut rthunk) => do_ne(lthunk, rthunk, doc),
+            Lt(ref mut lthunk, ref mut rthunk) => do_lt(lthunk, rthunk, doc),
+            Le(ref mut lthunk, ref mut rthunk) => do_le(lthunk, rthunk, doc),
+            Gt(ref mut lthunk, ref mut rthunk) => do_gt(lthunk, rthunk, doc),
+            Ge(ref mut lthunk, ref mut rthunk) => do_ge(lthunk, rthunk, doc),
 
             Shr(ref mut _lthunk, ref mut _rthunk) => {
                 Ok(vec![])
@@ -372,6 +380,67 @@ fn do_sub(lthunk: &mut Thunk, rthunk: &mut Thunk, doc:Json) -> Result<Output> {
                    .map(|(x,y)| x-y).collect()
     )
 }
+
+fn do_eq(lthunk: &mut Thunk, rthunk: &mut Thunk, doc: Json) -> Result<Output> {
+    use json::Json::{Bool};
+
+    Ok(lthunk(doc.clone())?.iter()
+                   .zip(rthunk(doc)?.iter())
+                   .map(|(x,y)| if x == y {Bool(true)} else {Bool(false)})
+                   .collect()
+    )
+}
+
+fn do_ne(lthunk: &mut Thunk, rthunk: &mut Thunk, doc: Json) -> Result<Output> {
+    use json::Json::{Bool};
+
+    Ok(lthunk(doc.clone())?.iter()
+                   .zip(rthunk(doc)?.iter())
+                   .map(|(x,y)| if x != y {Bool(true)} else {Bool(false)})
+                   .collect()
+    )
+}
+
+fn do_lt(lthunk: &mut Thunk, rthunk: &mut Thunk, doc: Json) -> Result<Output> {
+    use json::Json::{Bool};
+
+    Ok(lthunk(doc.clone())?.iter()
+                   .zip(rthunk(doc)?.iter())
+                   .map(|(x,y)| if x < y {Bool(true)} else {Bool(false)})
+                   .collect()
+    )
+}
+
+fn do_le(lthunk: &mut Thunk, rthunk: &mut Thunk, doc: Json) -> Result<Output> {
+    use json::Json::{Bool};
+
+    Ok(lthunk(doc.clone())?.iter()
+                   .zip(rthunk(doc)?.iter())
+                   .map(|(x,y)| if x <= y {Bool(true)} else {Bool(false)})
+                   .collect()
+    )
+}
+
+fn do_gt(lthunk: &mut Thunk, rthunk: &mut Thunk, doc: Json) -> Result<Output> {
+    use json::Json::{Bool};
+
+    Ok(lthunk(doc.clone())?.iter()
+                   .zip(rthunk(doc)?.iter())
+                   .map(|(x,y)| if x > y {Bool(true)} else {Bool(false)})
+                   .collect()
+    )
+}
+
+fn do_ge(lthunk: &mut Thunk, rthunk: &mut Thunk, doc: Json) -> Result<Output> {
+    use json::Json::{Bool};
+
+    Ok(lthunk(doc.clone())?.iter()
+                   .zip(rthunk(doc)?.iter())
+                   .map(|(x,y)| if x >= y {Bool(true)} else {Bool(false)})
+                   .collect()
+    )
+}
+
 
 fn do_pipe(_lhs_thunk: &mut Thunk, _rhs_thunk: &mut Thunk, _doc: Json)
     -> Result<Output>
