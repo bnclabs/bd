@@ -33,7 +33,7 @@ named!(nom_float(NS) -> f64,
         parse_to!(f64)
     )
 );
-fn nom_string(text: NS) -> nom::IResult<NS, Json> {
+fn nom_json_string(text: NS) -> nom::IResult<NS, Json> {
     check_next_byte(text, b'"')?;
     let mut lex = Lex::new(0, 1, 1);
     match parse_string(&text, &mut lex) {
@@ -44,7 +44,7 @@ fn nom_string(text: NS) -> nom::IResult<NS, Json> {
         }
     }
 }
-fn nom_array(text: NS) -> nom::IResult<NS, Json> {
+fn nom_json_array(text: NS) -> nom::IResult<NS, Json> {
     check_next_byte(text, b'[')?;
     let mut lex = Lex::new(0, 1, 1);
     match parse_array(&text, &mut lex) {
@@ -55,7 +55,7 @@ fn nom_array(text: NS) -> nom::IResult<NS, Json> {
         }
     }
 }
-fn nom_object(text: NS) -> nom::IResult<NS, Json> {
+fn nom_json_object(text: NS) -> nom::IResult<NS, Json> {
     check_next_byte(text, b'{')?;
     let mut lex = Lex::new(0, 1, 1);
     match parse_object(&text, &mut lex) {
@@ -362,7 +362,7 @@ named!(nom_mult_expr(NS) -> (NS, Thunk),
 named!(nom_key(NS) -> Json,
     alt!(
         nom_identifier => { |s: NS| Json::String((&s).to_string()) } |
-        nom_string
+        nom_json_string
     )
 );
 named!(nom_primary_index_short(NS) -> (Json, Option<NS>),
@@ -579,9 +579,9 @@ named!(nom_primary_literal(NS) -> Thunk,
         nom_false => { |_| Thunk::Literal(Json::Bool(false)) } |
         nom_int   => { |i| Thunk::Literal(Json::Integer(i)) } |
         nom_float => { |f| Thunk::Literal(Json::Float(f)) } |
-        nom_string => { |s| Thunk::Literal(s) } |
-        nom_array => { |a| Thunk::Literal(a) } |
-        nom_object => { |o| Thunk::Literal(o) }
+        nom_json_string => { |s| Thunk::Literal(s) } |
+        nom_json_array => { |a| Thunk::Literal(a) } |
+        nom_json_object => { |o| Thunk::Literal(o) }
     )
 );
 named!(nom_primary_builtins(NS) -> (NS, Vec<Thunk>),
@@ -642,10 +642,9 @@ named!(nom_expr_list(NS) -> Vec<Thunk>,
 
 fn nom_empty_program(text: NS) -> nom::IResult<NS, Thunk> {
     if text.len() == 0 {
-        Ok((NS(&text[..]), Thunk::Empty))
-    } else {
-        panic!("impossible situation")
+        return Ok((NS(&text[..]), Thunk::Empty))
     }
+    unreachable!()
 }
 named!(nom_program(NS) -> Thunk,
     ws!(alt!(
@@ -660,7 +659,7 @@ fn builtin_to_thunk((funcname, args): (NS, Vec<Thunk>)) -> Thunk {
 }
 
 fn index_short_to_thunk((key, opt): (Json, Option<NS>)) -> Thunk {
-    let key = match key {Json::String(s) => s, _ => panic!("impossible case")};
+    let key = match key {Json::String(s) => s, _ => unreachable!()};
     let off: Option<usize> = match key.parse() {
         Ok(off) => Some(off),
         _ => None
