@@ -5,7 +5,7 @@ Bigdata with Rust
 
 `db-rs` is a big-data package with following primary scope.
 
-* [x] Interpret data in JSON format.
+* [x] Interpret data in JSON format based on [RFC8259][jsonrfc].
 * [ ] Expression language to query JSON documents, similar to [jq][jq].
 * [ ] Data collation algorithm for JSON.
 * [ ] Patch algorithm based on [RFC6902][jsonpatch].
@@ -24,3 +24,4 @@ Bigdata with Rust
 
 [jq]: https://stedolan.github.io/jq/manual
 [jsonpatch]: https://tools.ietf.org/html/rfc6902
+[jsonrfc]: https://tools.ietf.org/html/rfc8259
