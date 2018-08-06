@@ -13,7 +13,6 @@ extern crate regex;
 
 pub mod json;
 pub mod jq;
-mod jqout;
 mod jqnom;
 mod lex;
 

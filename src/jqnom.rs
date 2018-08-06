@@ -1,65 +1,65 @@
-use nom::{self, {types::CompleteStr as S}, IResult};
+use nom::{self, {types::CompleteStr as NS}, IResult};
 
 use lex::Lex;
 use json::{Json, parse_string, parse_array, parse_object};
 use jq::Thunk;
 
-named!(nom_dot(S) -> S, tag!("."));
-named!(nom_dotdot(S) -> S, tag!(".."));
-named!(nom_colon(S) -> S, tag!(":"));
-named!(nom_comma(S) -> S, tag!(","));
-named!(nom_equal(S) -> S, tag!("="));
-named!(nom_open_sqr(S) -> S, tag!("["));
-named!(nom_clos_sqr(S) -> S, tag!("]"));
-named!(nom_open_brace(S) -> S, tag!("{"));
-named!(nom_clos_brace(S) -> S, tag!("}"));
-named!(nom_open_paran(S) -> S, tag!(")"));
-named!(nom_clos_paran(S) -> S, tag!(")"));
-named!(nom_opt(S) -> Option<S>, opt!(tag!("?")));
-named!(nom_identifier(S) -> S, re_match!(r#"^[a-zA-Z0-9_]+"#));
+named!(nom_dot(NS) -> NS, tag!("."));
+named!(nom_dotdot(NS) -> NS, tag!(".."));
+named!(nom_colon(NS) -> NS, tag!(":"));
+named!(nom_comma(NS) -> NS, tag!(","));
+named!(nom_equal(NS) -> NS, tag!("="));
+named!(nom_open_sqr(NS) -> NS, tag!("["));
+named!(nom_clos_sqr(NS) -> NS, tag!("]"));
+named!(nom_open_brace(NS) -> NS, tag!("{"));
+named!(nom_clos_brace(NS) -> NS, tag!("}"));
+named!(nom_open_paran(NS) -> NS, tag!(")"));
+named!(nom_clos_paran(NS) -> NS, tag!(")"));
+named!(nom_opt(NS) -> Option<NS>, opt!(tag!("?")));
+named!(nom_identifier(NS) -> NS, re_match!(r#"^[a-zA-Z0-9_]+"#));
 
-named!(nom_null(S) -> S, tag!("null"));
-named!(nom_true(S) -> S, tag!("true"));
-named!(nom_false(S) -> S, tag!("false"));
-named!(nom_int(S) -> i128,
+named!(nom_null(NS) -> NS, tag!("null"));
+named!(nom_true(NS) -> NS, tag!("true"));
+named!(nom_false(NS) -> NS, tag!("false"));
+named!(nom_int(NS) -> i128,
     flat_map!(re_match!(r#"^[+-]?\d+"#), parse_to!(i128))
 );
-named!(nom_usize(S) -> usize,
+named!(nom_usize(NS) -> usize,
     flat_map!(re_match!(r#"^[+-]?\d+"#), parse_to!(usize))
 );
-named!(nom_float(S) -> f64,
+named!(nom_float(NS) -> f64,
     flat_map!(
         re_match!(r#"^[-+]?[0-9]*\.?[0-9]+([eE][-+]?[0-9]+)?"#),
         parse_to!(f64)
     )
 );
-fn nom_string(text: S) -> nom::IResult<S, Json> {
+fn nom_string(text: NS) -> nom::IResult<NS, Json> {
     check_next_byte(text, b'"')?;
     let mut lex = Lex::new(0, 1, 1);
     match parse_string(&text, &mut lex) {
-        Ok(s) => Ok((S(&text[lex.off..]), s)),
+        Ok(s) => Ok((NS(&text[lex.off..]), s)),
         _ => {
             let kind = nom::ErrorKind::Custom(lex.off as u32);
             return Err(nom::Err::Failure(nom::Context::Code(text, kind)));
         }
     }
 }
-fn nom_array(text: S) -> nom::IResult<S, Json> {
+fn nom_array(text: NS) -> nom::IResult<NS, Json> {
     check_next_byte(text, b'[')?;
     let mut lex = Lex::new(0, 1, 1);
     match parse_array(&text, &mut lex) {
-        Ok(a) => Ok((S(&text[lex.off..]), a)),
+        Ok(a) => Ok((NS(&text[lex.off..]), a)),
         _ => {
             let kind = nom::ErrorKind::Custom(lex.off as u32);
             return Err(nom::Err::Failure(nom::Context::Code(text, kind)));
         }
     }
 }
-fn nom_object(text: S) -> nom::IResult<S, Json> {
+fn nom_object(text: NS) -> nom::IResult<NS, Json> {
     check_next_byte(text, b'{')?;
     let mut lex = Lex::new(0, 1, 1);
     match parse_object(&text, &mut lex) {
-        Ok(o) => Ok((S(&text[lex.off..]), o)),
+        Ok(o) => Ok((NS(&text[lex.off..]), o)),
         _ => {
             let kind = nom::ErrorKind::Custom(lex.off as u32);
             return Err(nom::Err::Failure(nom::Context::Code(text, kind)));
@@ -101,7 +101,7 @@ fn nom_object(text: S) -> nom::IResult<S, Json> {
 //                | '!' Primary
 //                | <and many more can be added>
 
-named!(nom_expr(S) -> Thunk,
+named!(nom_expr(NS) -> Thunk,
     map!(
         do_parse!(
              thunk: nom_or >>
@@ -116,7 +116,7 @@ named!(nom_expr(S) -> Thunk,
         }
     )
 );
-named!(nom_pipe_expr(S) -> Thunk,
+named!(nom_pipe_expr(NS) -> Thunk,
     do_parse!(
               tag!("|") >>
         expr: nom_or >>
@@ -124,7 +124,7 @@ named!(nom_pipe_expr(S) -> Thunk,
     )
 );
 
-named!(nom_or(S) -> Thunk,
+named!(nom_or(NS) -> Thunk,
     map!(
         do_parse!(
              thunk: nom_and >>
@@ -139,7 +139,7 @@ named!(nom_or(S) -> Thunk,
         }
     )
 );
-named!(nom_or_expr(S) -> Thunk,
+named!(nom_or_expr(NS) -> Thunk,
     do_parse!(
               tag!("||") >>
         expr: nom_and >>
@@ -147,7 +147,7 @@ named!(nom_or_expr(S) -> Thunk,
     )
 );
 
-named!(nom_and(S) -> Thunk,
+named!(nom_and(NS) -> Thunk,
     map!(
         do_parse!(
              thunk: nom_compare >>
@@ -162,7 +162,7 @@ named!(nom_and(S) -> Thunk,
         }
     )
 );
-named!(nom_and_expr(S) -> Thunk,
+named!(nom_and_expr(NS) -> Thunk,
     do_parse!(
               tag!("&&") >>
         expr: nom_compare >>
@@ -170,7 +170,7 @@ named!(nom_and_expr(S) -> Thunk,
     )
 );
 
-named!(nom_compare(S) -> Thunk,
+named!(nom_compare(NS) -> Thunk,
     map!(
         do_parse!(
                 thunk: nom_bitor >>
@@ -193,7 +193,7 @@ named!(nom_compare(S) -> Thunk,
         }
     )
 );
-named!(nom_compare_expr(S) -> (S, Thunk),
+named!(nom_compare_expr(NS) -> (NS, Thunk),
     do_parse!(
           op: alt!(
                 tag!("==") | tag!("!=") | tag!("<") |
@@ -204,7 +204,7 @@ named!(nom_compare_expr(S) -> (S, Thunk),
     )
 );
 
-named!(nom_bitor(S) -> Thunk,
+named!(nom_bitor(NS) -> Thunk,
     map!(
         do_parse!(
              thunk: nom_bitxor >>
@@ -219,7 +219,7 @@ named!(nom_bitor(S) -> Thunk,
         }
     )
 );
-named!(nom_bitor_expr(S) -> Thunk,
+named!(nom_bitor_expr(NS) -> Thunk,
     do_parse!(
               tag!("bor") >>
         expr: nom_bitxor >>
@@ -227,7 +227,7 @@ named!(nom_bitor_expr(S) -> Thunk,
     )
 );
 
-named!(nom_bitxor(S) -> Thunk,
+named!(nom_bitxor(NS) -> Thunk,
     map!(
         do_parse!(
              thunk: nom_bitand >>
@@ -242,7 +242,7 @@ named!(nom_bitxor(S) -> Thunk,
         }
     )
 );
-named!(nom_bitxor_expr(S) -> Thunk,
+named!(nom_bitxor_expr(NS) -> Thunk,
     do_parse!(
               tag!("^") >>
         expr: nom_bitand >>
@@ -250,7 +250,7 @@ named!(nom_bitxor_expr(S) -> Thunk,
     )
 );
 
-named!(nom_bitand(S) -> Thunk,
+named!(nom_bitand(NS) -> Thunk,
     map!(
         do_parse!(
              thunk: nom_shift >>
@@ -265,7 +265,7 @@ named!(nom_bitand(S) -> Thunk,
         }
     )
 );
-named!(nom_bitand_expr(S) -> Thunk,
+named!(nom_bitand_expr(NS) -> Thunk,
     do_parse!(
               tag!("&") >>
         expr: nom_shift >>
@@ -273,7 +273,7 @@ named!(nom_bitand_expr(S) -> Thunk,
     )
 );
 
-named!(nom_shift(S) -> Thunk,
+named!(nom_shift(NS) -> Thunk,
     map!(
         do_parse!(
                 thunk: nom_add_sub >>
@@ -292,7 +292,7 @@ named!(nom_shift(S) -> Thunk,
         }
     )
 );
-named!(nom_shift_expr(S) -> (S, Thunk),
+named!(nom_shift_expr(NS) -> (NS, Thunk),
     do_parse!(
           op: alt!(tag!("<<") | tag!(">>")) >>
         expr: nom_add_sub >>
@@ -300,7 +300,7 @@ named!(nom_shift_expr(S) -> (S, Thunk),
     )
 );
 
-named!(nom_add_sub(S) -> Thunk,
+named!(nom_add_sub(NS) -> Thunk,
     map!(
         do_parse!(
                 thunk: nom_mult_div_rem >>
@@ -319,7 +319,7 @@ named!(nom_add_sub(S) -> Thunk,
         }
     )
 );
-named!(nom_add_expr(S) -> (S, Thunk),
+named!(nom_add_expr(NS) -> (NS, Thunk),
     do_parse!(
           op: alt!(tag!("+") | tag!("-")) >>
         expr: nom_mult_div_rem >>
@@ -327,7 +327,7 @@ named!(nom_add_expr(S) -> (S, Thunk),
     )
 );
 
-named!(nom_mult_div_rem(S) -> Thunk,
+named!(nom_mult_div_rem(NS) -> Thunk,
     map!(
         do_parse!(
                 thunk: nom_primary_expr >>
@@ -347,7 +347,7 @@ named!(nom_mult_div_rem(S) -> Thunk,
         }
     )
 );
-named!(nom_mult_expr(S) -> (S, Thunk),
+named!(nom_mult_expr(NS) -> (NS, Thunk),
     do_parse!(
           op: alt!(tag!("*") | tag!("/") | tag!("%")) >>
         expr: nom_primary_expr >>
@@ -359,13 +359,13 @@ named!(nom_mult_expr(S) -> (S, Thunk),
 //------------------ PRIMAR EXPRESSIONS ------------------------
 
 
-named!(nom_key(S) -> Json,
+named!(nom_key(NS) -> Json,
     alt!(
-        nom_identifier => { |s: S| Json::String((&s).to_string()) } |
+        nom_identifier => { |s: NS| Json::String((&s).to_string()) } |
         nom_string
     )
 );
-named!(nom_primary_index_short(S) -> (Json, Option<S>),
+named!(nom_primary_index_short(NS) -> (Json, Option<NS>),
     do_parse!(
              nom_dot  >>
         key: nom_key  >>
@@ -373,7 +373,7 @@ named!(nom_primary_index_short(S) -> (Json, Option<S>),
         (key, opt)
     )
 );
-named!(nom_primary_slice1(S) -> (Thunk, usize, usize, Option<S>),
+named!(nom_primary_slice1(NS) -> (Thunk, usize, usize, Option<NS>),
     do_parse!(
          thunk: nom_primary_expr >>
                 nom_open_sqr >>
@@ -386,7 +386,7 @@ named!(nom_primary_slice1(S) -> (Thunk, usize, usize, Option<S>),
         (thunk, start, (end+1), opt)
     )
 );
-named!(nom_primary_slice2(S) -> (Thunk, usize, usize, Option<S>),
+named!(nom_primary_slice2(NS) -> (Thunk, usize, usize, Option<NS>),
     do_parse!(
          thunk: nom_primary_expr >>
                 nom_open_sqr >>
@@ -398,7 +398,7 @@ named!(nom_primary_slice2(S) -> (Thunk, usize, usize, Option<S>),
         (thunk, start, end, opt)
     )
 );
-named!(nom_primary_slice3(S) -> (Thunk, usize, usize, Option<S>),
+named!(nom_primary_slice3(NS) -> (Thunk, usize, usize, Option<NS>),
     do_parse!(
          thunk: nom_primary_expr >>
                 nom_open_sqr >>
@@ -409,7 +409,7 @@ named!(nom_primary_slice3(S) -> (Thunk, usize, usize, Option<S>),
         (thunk, start, usize::max_value(), opt)
     )
 );
-named!(nom_primary_slice4(S) -> (Thunk, usize, usize, Option<S>),
+named!(nom_primary_slice4(NS) -> (Thunk, usize, usize, Option<NS>),
     do_parse!(
          thunk: nom_primary_expr >>
                 nom_open_sqr >>
@@ -420,7 +420,7 @@ named!(nom_primary_slice4(S) -> (Thunk, usize, usize, Option<S>),
         (thunk, usize::min_value(), end, opt)
     )
 );
-named!(nom_primary_slice5(S) -> (Thunk, usize, usize, Option<S>),
+named!(nom_primary_slice5(NS) -> (Thunk, usize, usize, Option<NS>),
     do_parse!(
          thunk: nom_primary_expr >>
                 nom_open_sqr >>
@@ -432,7 +432,7 @@ named!(nom_primary_slice5(S) -> (Thunk, usize, usize, Option<S>),
         (thunk, usize::min_value(), (end+1), opt)
     )
 );
-named!(nom_primary_slice6(S) -> (Thunk, usize, usize, Option<S>),
+named!(nom_primary_slice6(NS) -> (Thunk, usize, usize, Option<NS>),
     do_parse!(
          thunk: nom_primary_expr >>
                 nom_open_sqr >>
@@ -442,12 +442,12 @@ named!(nom_primary_slice6(S) -> (Thunk, usize, usize, Option<S>),
         (thunk, usize::min_value(), usize::max_value(), opt)
     )
 );
-named!(nom_iterate_item(S) -> Thunk,
+named!(nom_iterate_item(NS) -> Thunk,
     map!(
         do_parse!(
         thunk: alt!(
                     nom_expr |
-                    nom_identifier => { |s: S| {
+                    nom_identifier => { |s: NS| {
                         Thunk::IndexShortcut((&s).to_string(), None, false)
                     }}
                ) >>
@@ -468,14 +468,14 @@ named!(nom_iterate_item(S) -> Thunk,
         }
     )
 );
-named!(nom_iterate_comma_item(S) -> Thunk,
+named!(nom_iterate_comma_item(NS) -> Thunk,
     do_parse!(
                nom_comma >>
         thunk: nom_iterate_item >>
         (thunk)
     )
 );
-named!(nom_iterate_items(S) -> Vec<Thunk>,
+named!(nom_iterate_items(NS) -> Vec<Thunk>,
     map!(
         do_parse!(
              item: nom_iterate_item >>
@@ -490,7 +490,7 @@ named!(nom_iterate_items(S) -> Vec<Thunk>,
         }
     )
 );
-named!(nom_primary_iterate(S) -> (Thunk, Vec<Thunk>, Option<S>),
+named!(nom_primary_iterate(NS) -> (Thunk, Vec<Thunk>, Option<NS>),
     do_parse!(
          thunk: nom_primary_expr >>
                 nom_open_sqr  >>
@@ -500,7 +500,7 @@ named!(nom_primary_iterate(S) -> (Thunk, Vec<Thunk>, Option<S>),
         (thunk, thunks, opt)
     )
 );
-named!(nom_primary_collection1(S) -> (Vec<Thunk>, Option<S>),
+named!(nom_primary_collection1(NS) -> (Vec<Thunk>, Option<NS>),
     do_parse!(
                 nom_open_sqr  >>
         thunks: nom_expr_list >>
@@ -509,7 +509,7 @@ named!(nom_primary_collection1(S) -> (Vec<Thunk>, Option<S>),
         (thunks, opt)
     )
 );
-named!(nom_collection2_item(S) -> (Thunk, Thunk),
+named!(nom_collection2_item(NS) -> (Thunk, Thunk),
     do_parse!(
         key: nom_expr >>
              nom_colon >>
@@ -517,14 +517,14 @@ named!(nom_collection2_item(S) -> (Thunk, Thunk),
         (key,val)
     )
 );
-named!(nom_collection2_comma_item(S) -> (Thunk, Thunk),
+named!(nom_collection2_comma_item(NS) -> (Thunk, Thunk),
     do_parse!(
                nom_comma >>
         thunk: nom_collection2_item >>
         (thunk)
     )
 );
-named!(nom_collection2_items(S) -> Vec<(Thunk, Thunk)>,
+named!(nom_collection2_items(NS) -> Vec<(Thunk, Thunk)>,
     map!(
         do_parse!(
              item: nom_collection2_item >>
@@ -539,7 +539,7 @@ named!(nom_collection2_items(S) -> Vec<(Thunk, Thunk)>,
         }
     )
 );
-named!(nom_primary_collection2(S) -> (Vec<(Thunk, Thunk)>, Option<S>),
+named!(nom_primary_collection2(NS) -> (Vec<(Thunk, Thunk)>, Option<NS>),
     do_parse!(
                nom_open_brace  >>
         items: nom_collection2_items >>
@@ -550,7 +550,7 @@ named!(nom_primary_collection2(S) -> (Vec<(Thunk, Thunk)>, Option<S>),
 );
 
 
-named!(nom_primary_paran_expr(S) -> Thunk,
+named!(nom_primary_paran_expr(NS) -> Thunk,
     do_parse!(
                nom_open_paran >>
         thunk: nom_expr >>
@@ -558,21 +558,21 @@ named!(nom_primary_paran_expr(S) -> Thunk,
         (thunk)
     )
 );
-named!(nom_primary_unaryneg_expr(S) -> Thunk,
+named!(nom_primary_unaryneg_expr(NS) -> Thunk,
     do_parse!(
                tag!("-") >>
         thunk: nom_expr >>
         (thunk)
     )
 );
-named!(nom_primary_unarynot_expr(S) -> Thunk,
+named!(nom_primary_unarynot_expr(NS) -> Thunk,
     do_parse!(
                tag!("!") >>
         thunk: nom_expr >>
         (thunk)
     )
 );
-named!(nom_primary_literal(S) -> Thunk,
+named!(nom_primary_literal(NS) -> Thunk,
     alt!(
         nom_null  => { |_| Thunk::Literal(Json::Null) } |
         nom_true  => { |_| Thunk::Literal(Json::Bool(true)) } |
@@ -584,7 +584,7 @@ named!(nom_primary_literal(S) -> Thunk,
         nom_object => { |o| Thunk::Literal(o) }
     )
 );
-named!(nom_primary_builtins(S) -> (S, Vec<Thunk>),
+named!(nom_primary_builtins(NS) -> (NS, Vec<Thunk>),
     do_parse!(
         funcname: nom_identifier >>
                   nom_open_paran >>
@@ -594,7 +594,7 @@ named!(nom_primary_builtins(S) -> (S, Vec<Thunk>),
     )
 );
 
-named!(nom_primary_expr(S) -> Thunk,
+named!(nom_primary_expr(NS) -> Thunk,
     alt!(
         nom_primary_literal | // should come before identifier
         nom_primary_builtins => { builtin_to_thunk } |
@@ -616,14 +616,14 @@ named!(nom_primary_expr(S) -> Thunk,
     )
 );
 
-named!(nom_comma_expr(S) -> Thunk,
+named!(nom_comma_expr(NS) -> Thunk,
     do_parse!(
                nom_comma >>
         thunk: nom_expr  >>
         (thunk)
     )
 );
-named!(nom_expr_list(S) -> Vec<Thunk>,
+named!(nom_expr_list(NS) -> Vec<Thunk>,
     map!(
         do_parse!(
              thunk:  nom_expr                      >>
@@ -640,14 +640,14 @@ named!(nom_expr_list(S) -> Vec<Thunk>,
 );
 
 
-fn nom_empty_program(text: S) -> nom::IResult<S, Thunk> {
+fn nom_empty_program(text: NS) -> nom::IResult<NS, Thunk> {
     if text.len() == 0 {
-        Ok((S(&text[..]), Thunk::Empty))
+        Ok((NS(&text[..]), Thunk::Empty))
     } else {
         panic!("impossible situation")
     }
 }
-named!(nom_program(S) -> Thunk,
+named!(nom_program(NS) -> Thunk,
     ws!(alt!(
         nom_expr |
         nom_empty_program // should alway be last.
@@ -655,11 +655,11 @@ named!(nom_program(S) -> Thunk,
 );
 
 
-fn builtin_to_thunk((funcname, args): (S, Vec<Thunk>)) -> Thunk {
+fn builtin_to_thunk((funcname, args): (NS, Vec<Thunk>)) -> Thunk {
     Thunk::Builtin(funcname.to_string(), args)
 }
 
-fn index_short_to_thunk((key, opt): (Json, Option<S>)) -> Thunk {
+fn index_short_to_thunk((key, opt): (Json, Option<NS>)) -> Thunk {
     let key = match key {Json::String(s) => s, _ => panic!("impossible case")};
     let off: Option<usize> = match key.parse() {
         Ok(off) => Some(off),
@@ -668,28 +668,28 @@ fn index_short_to_thunk((key, opt): (Json, Option<S>)) -> Thunk {
     Thunk::IndexShortcut(key, off, opt.map_or(false, |_| true))
 }
 
-fn slice_to_thunk((thunk, start, end, opt): (Thunk, usize, usize, Option<S>))
+fn slice_to_thunk((thunk, start, end, opt): (Thunk, usize, usize, Option<NS>))
     -> Thunk
 {
     Thunk::Slice(Box::new(thunk), start, end, opt.map_or(false, |_| true))
 }
 
-fn iterate_to_thunk((thunk, thunks, opt): (Thunk, Vec<Thunk>, Option<S>)) -> Thunk {
+fn iterate_to_thunk((thunk, thunks, opt): (Thunk, Vec<Thunk>, Option<NS>)) -> Thunk {
     let opt = opt.map_or(false, |_| true);
     Thunk::Iterate(Box::new(thunk), thunks, opt)
 }
 
-fn collection1_to_thunk((thunks, opt): (Vec<Thunk>, Option<S>)) -> Thunk {
+fn collection1_to_thunk((thunks, opt): (Vec<Thunk>, Option<NS>)) -> Thunk {
     Thunk::List(thunks, opt.map_or(false, |_| true))
 }
 
-fn collection2_to_thunk((items, opt): (Vec<(Thunk,Thunk)>, Option<S>)) -> Thunk {
+fn collection2_to_thunk((items, opt): (Vec<(Thunk,Thunk)>, Option<NS>)) -> Thunk {
     Thunk::Dict(items, opt.map_or(false, |_| true))
 }
 
 
 
-fn check_next_byte(text: S, b: u8) -> nom::IResult<S, ()> {
+fn check_next_byte(text: NS, b: u8) -> nom::IResult<NS, ()> {
     let progbs = text.as_bytes();
     if progbs.len() == 0 {
         let ctxt = nom::Context::Code(text, nom::ErrorKind::Custom(0));
@@ -702,6 +702,6 @@ fn check_next_byte(text: S, b: u8) -> nom::IResult<S, ()> {
     Ok((text, ()))
 }
 
-pub fn parse_program_nom<'a>(s: S<'a>) -> IResult<S<'a>, Thunk> {
+pub fn parse_program_nom<'a>(s: NS<'a>) -> IResult<NS<'a>, Thunk> {
     nom_program(s)
 }

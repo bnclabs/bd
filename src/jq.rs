@@ -1,7 +1,7 @@
 use std::{result, error, cmp};
 use std::fmt::{self};
 
-use nom::{self, {types::CompleteStr as S}};
+use nom::{self, {types::CompleteStr as NS}};
 
 use json::{self, Json, KeyValue};
 use jqnom::parse_program_nom;
@@ -53,8 +53,8 @@ impl From<json::Error> for Error {
     }
 }
 
-impl<'a> From<nom::Err<S<'a>>> for Error {
-    fn from(err: nom::Err<S<'a>>) -> Error {
+impl<'a> From<nom::Err<NS<'a>>> for Error {
+    fn from(err: nom::Err<NS<'a>>) -> Error {
         use nom::simple_errors::Context as NomContext;
 
         match err {
@@ -75,7 +75,7 @@ impl<'a> From<nom::Err<S<'a>>> for Error {
 
 
 pub fn parse_program(text: &str) -> Result<Box<Thunk>> {
-    let (_, thunk) = parse_program_nom(S(text))?;
+    let (_, thunk) = parse_program_nom(NS(text))?;
     Ok(Box::new(thunk))
 }
 
@@ -521,15 +521,16 @@ fn do_pipe(lthunk: &mut Thunk, rthunk: &mut Thunk, doc: Json) -> Result<Output> 
 #[cfg(test)]
 mod test {
     use super::*;
-    use json::{JsonBuf};
+    use json::{JsonBuf, Json::{String as S}};
     //use std;
 
     #[test]
     fn test_jq_empty() {
+        use {
         match parse("").unwrap() {
             mut thunk@box Thunk::Empty => {
-                let mut out = thunk(Json::String("hello".to_string())).unwrap();
-                assert_eq!(Output::One(Json::String("hello".to_string())), out);
+                let mut out = thunk(S("hello".to_string())).unwrap();
+                assert_eq!(Output::One(S("hello".to_string())), out);
             },
             _ => {
                 panic!("unexpected thunk")
@@ -541,8 +542,8 @@ mod test {
     fn test_jq_empty_ws() {
         match parse("   ").unwrap() {
             mut thunk@box Thunk::Empty => {
-                let mut out = thunk(Json::String("hello".to_string())).unwrap();
-                assert_eq!(Output::One(Json::String("hello".to_string())), out);
+                let mut out = thunk(S("hello".to_string())).unwrap();
+                assert_eq!(Output::One(S("hello".to_string())), out);
             },
             _ => {
                 panic!("unexpected thunk")
@@ -604,7 +605,7 @@ mod test {
         let doc = JsonBuf::parse_str("[10]").unwrap();
         let out = thunk(doc.clone()).unwrap();
         assert_eq!(
-            Output::One(Json::String("hello world".to_string())),
+            Output::One(S("hello world".to_string())),
             out
         );
     }

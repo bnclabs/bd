@@ -13,8 +13,6 @@ include!("./json.rs.lookup");
 
 pub type Result<T> = result::Result<T,Error>;
 
-// TODO: use Json::String as S
-
 
 #[derive(Debug,Eq,PartialEq)]
 pub enum Error {
@@ -260,6 +258,8 @@ fn parse_num(text: &str, lex: &mut Lex) -> Result<Json> {
 }
 
 pub fn parse_string(text: &str, lex: &mut Lex) -> Result<Json> {
+    use self::Json::{String as S};
+
     let mut escape = false;
     let mut res = String::new();
     let mut chars = (&text[lex.off..]).char_indices();
@@ -278,7 +278,7 @@ pub fn parse_string(text: &str, lex: &mut Lex) -> Result<Json> {
             match ch {
                 '"' => {
                     lex.incr_col(i+1);
-                    return Ok(Json::String(res));
+                    return Ok(S(res));
                 },
                 _ => res.push(ch),
             }
@@ -523,8 +523,9 @@ impl Json {
     }
 
     pub fn string(self) -> Result<String> {
+        use self::Json::{String as S};
         match self {
-            Json::String(s) => Ok(s),
+            S(s) => Ok(s),
             _ => Err(Error::NotMyType("json not a string".to_string()))
         }
     }
@@ -558,7 +559,7 @@ impl Json {
     }
 
     pub fn to_json(&self, text: &mut String) {
-        use json::Json::{Null, Bool, Integer, Float, Array, Object};
+        use json::Json::{Null,Bool,Integer,Float,Array,Object, String as S};
 
         match self {
             Null => text.push_str("null"),
@@ -566,7 +567,7 @@ impl Json {
             Bool(false) => text.push_str("false"),
             Integer(val) => write!(text, "{}", val).unwrap(),
             Float(val) => write!(text, "{:e}", val).unwrap(),
-            Json::String(val) => Self::encode_string(&val, text),
+            S(val) => Self::encode_string(&val, text),
             Array(val) => {
                 if val.len() == 0 {
                     text.push_str("[]");
@@ -1151,7 +1152,7 @@ mod tests {
 
     #[test]
     fn test_json_iter() {
-        use self::Json::{Integer, Float, Bool, Array, Object};
+        use self::Json::{Integer, Float, Bool, Array, Object, String as S};
 
         let docs = r#"null 10 10.2 "hello world" true false [1,2] {"a":10}"#;
         let docs: &[u8] = docs.as_ref();
@@ -1159,7 +1160,7 @@ mod tests {
         assert_eq!(Some(Json::Null), iter.next());
         assert_eq!(Some(Integer(10)), iter.next());
         assert_eq!(Some(Float(10.2)), iter.next());
-        assert_eq!(Some(Json::String("hello world".to_string())), iter.next());
+        assert_eq!(Some(S("hello world".to_string())), iter.next());
         assert_eq!(Some(Bool(true)), iter.next());
         assert_eq!(Some(Bool(false)), iter.next());
         assert_eq!(Some(Array(vec![Integer(1), Integer(2)])), iter.next());
