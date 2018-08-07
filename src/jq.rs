@@ -479,44 +479,6 @@ fn do_pipe(lthunk: &mut Thunk, rthunk: &mut Thunk, doc: Json) -> Result<Output> 
     Ok(outs)
 }
 
-//fn index_array(a: Vec<Json>, key: &str, off: Option<usize>, opt: bool)
-//    -> Result<Output>
-//{
-//    match (off, opt) {
-//        (None, true) => {
-//            Ok(Output::One(Json::Null))
-//        },
-//        (None, false) => {
-//            Err(Error::Op(format!("not an array index {}", key)))
-//        },
-//        (Some(off), true) if off >= a.len() => {
-//            Ok(Output::One(Json::Null))
-//        },
-//        (Some(off), false) if off >= a.len() => {
-//            Err(Error::Op(format!("offset {} out of bound", off)))
-//        },
-//        (Some(off), _) => {
-//            Ok(Output::One(a.into_iter().nth(off).unwrap()))
-//        },
-//    }
-//}
-//
-//fn index_object(m: Vec<KeyValue>, key: &str, opt: bool)
-//    -> Result<Output>
-//{
-//    use json::search_by_key;
-//
-//    match search_by_key(&m, key) {
-//        Ok(i) => {
-//            Ok(Output::One(m.into_iter().nth(i).unwrap().1))
-//        },
-//        Err(_) => match opt {
-//            true => Ok(Output::One(Json::Null)),
-//            false => Err(Error::Op(format!("missing key {}", key))),
-//        }
-//    }
-//}
-
 
 #[cfg(test)]
 mod test {
