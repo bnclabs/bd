@@ -1,0 +1,2 @@
+trait Document : Neg + Not {
+}

@@ -1041,12 +1041,11 @@ fn mixin_object(mut this: Vec<KeyValue>, other: Vec<KeyValue>)
 
     for o in other.into_iter() {
         match search_by_key(&this, &o.0) {
-            Ok(i) => match (&this[i].1, &o.1) {
-                (Object(val1), Object(val2)) => {
-                    this = mixin_object(this, val1.to_vec());
-                    this = mixin_object(this, val2.to_vec());
+            Ok(i) => match (this[i].clone().1, o) {
+                (Object(val), KeyValue(_, Object(val2))) => {
+                    this[i].1 = Object(mixin_object(val, val2))
                 },
-                _ => this.insert(i, o.clone())
+                (_, o) => this.insert(i, o)
             },
             Err(KeyMissing(i, _)) => this.insert(i, o.clone()),
             _ => unreachable!(),

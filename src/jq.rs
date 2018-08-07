@@ -488,7 +488,6 @@ mod test {
 
     #[test]
     fn test_jq_empty() {
-        use {
         match parse("").unwrap() {
             mut thunk@box Thunk::Empty => {
                 let mut out = thunk(S("hello".to_string())).unwrap();
