@@ -95,11 +95,6 @@ impl JsonBuf {
         JsonIterate::new(r)
     }
 
-    pub fn parse_str(text: &str) -> Result<Json> {
-        let mut lex = Lex::new(0, 1, 1);
-        parse_value(&text, &mut lex)
-    }
-
     pub fn set<T>(&mut self, text: &T) where T: AsRef<str> + ?Sized {
         self.inner.clear();
         self.lex.set(0, 1, 1);
@@ -552,50 +547,8 @@ impl Json {
         }
     }
 
-    pub fn to_json(&self, text: &mut String) {
-        use json::Json::{Null,Bool,Integer,Float,Array,Object, String as S};
-
-        match self {
-            Null => text.push_str("null"),
-            Bool(true) => text.push_str("true"),
-            Bool(false) => text.push_str("false"),
-            Integer(val) => write!(text, "{}", val).unwrap(),
-            Float(val) => write!(text, "{:e}", val).unwrap(),
-            S(val) => Self::encode_string(&val, text),
-            Array(val) => {
-                if val.len() == 0 {
-                    text.push_str("[]");
-
-                } else {
-                    text.push('[');
-                    val[..val.len()-1]
-                        .iter()
-                        .for_each(|item| {item.to_json(text); text.push(',')});
-                    val[val.len()-1].to_json(text);
-                    text.push(']');
-                }
-            },
-            Object(val) => {
-                let val_len = val.len();
-                if val_len == 0 {
-                    text.push_str("{}");
-
-                } else {
-                    text.push('{');
-                    for (i, kv) in val.iter().enumerate() {
-                        Self::encode_string(&kv.0, text);
-                        text.push(':');
-                        kv.1.to_json(text);
-                        if i < (val_len - 1) { text.push(','); }
-                    }
-                    text.push('}');
-                }
-            }
-        }
-    }
-
-    fn encode_string(val: &str, text: &mut String) {
-        text.push('"');
+    fn encode_string<W: Write>(w: &mut W, val: &str) -> fmt::Result {
+        write!(w, "\"")?;
 
         let mut start = 0;
         for (i, byte) in val.bytes().enumerate() {
@@ -603,16 +556,15 @@ impl Json {
             if escstr.len() == 0 { continue }
 
             if start < i {
-                text.push_str(&val[start..i]);
+                write!(w, "{}", &val[start..i])?;
             }
-            text.push_str(escstr);
+            write!(w, "{}", escstr)?;
             start = i + 1;
         }
         if start != val.len() {
-            text.push_str(&val[start..]);
+            write!(w, "{}", &val[start..])?;
         }
-
-        text.push('"');
+        write!(w, "\"")
     }
 
     fn string(self) -> Result<String> {
@@ -707,16 +659,52 @@ impl From<Json> for bool {
 impl FromStr for Json {
     type Err=Error;
 
-    fn from_str(s: &str) -> Result<Json> {
-        JsonBuf::parse_str(s)
+    fn from_str(text: &str) -> Result<Json> {
+        let mut lex = Lex::new(0, 1, 1);
+        parse_value(&text, &mut lex)
     }
 }
 
 impl fmt::Display for Json {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        let mut s = String::new();
-        self.to_json(&mut s);
-        write!(f, "{}", s)
+        use json::Json::{Null,Bool,Integer,Float,Array,Object, String as S};
+
+        match self {
+            Null => write!(f, "null"),
+            Bool(true) => write!(f, "true"),
+            Bool(false) => write!(f, "false"),
+            Integer(val) => write!(f, "{}", val),
+            Float(val) => write!(f, "{:e}", val),
+            S(val) => { Self::encode_string(f, &val)?; Ok(()) },
+            Array(val) => {
+                if val.len() == 0 {
+                    write!(f, "[]")
+
+                } else {
+                    write!(f, "[")?;
+                    for item in val[..val.len()-1].iter() {
+                        write!(f, "{},", item)?;
+                    }
+                    write!(f, "{}", val[val.len()-1])?;
+                    write!(f, "]")
+                }
+            },
+            Object(val) => {
+                let val_len = val.len();
+                if val_len == 0 {
+                    write!(f, "{{}}")
+
+                } else {
+                    write!(f, "{{")?;
+                    for (i, kv) in val.iter().enumerate() {
+                        Self::encode_string(f, &kv.0)?;
+                        write!(f, ":{}", kv.1)?;
+                        if i < (val_len - 1) { write!(f, ",")?; }
+                    }
+                    write!(f, "}}")
+                }
+            }
+        }
     }
 }
 
