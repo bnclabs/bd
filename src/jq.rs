@@ -3,11 +3,12 @@ use std::fmt::{self};
 
 use nom::{self, {types::CompleteStr as NS}};
 
-use json::{self, Json, KeyValue};
+use json::{self, Json};
 use jqnom::parse_program_nom;
+use document::Document;
 
 
-type Output = Vec<Json>;
+type Output<D> = Vec<D>;
 
 
 pub type Result<T> = result::Result<T,Error>;
@@ -81,7 +82,7 @@ pub fn parse_program(text: &str) -> Result<Box<Thunk>> {
 
 
 #[derive(Debug)]
-pub enum Thunk {
+pub enum Thunk where {
     // Primary thunks
     Empty,
     Identity,
@@ -118,8 +119,8 @@ pub enum Thunk {
     Builtin(String, Vec<Thunk>),
 }
 
-impl FnMut<(Json,)> for Thunk {
-    extern "rust-call" fn call_mut(&mut self, args: (Json,)) -> Self::Output {
+impl<D> FnMut<(D,)> for Thunk where D: Document {
+    extern "rust-call" fn call_mut(&mut self, args: (D,)) -> Self::Output {
         use jq::Thunk::*;
 
         let doc = args.0;
@@ -133,13 +134,11 @@ impl FnMut<(Json,)> for Thunk {
             },
 
             Recurse => { // vector of one or more items
-                let mut list = Vec::new();
-                do_recurse(&mut list, doc);
-                Ok(list)
+                Ok(doc.recurse())
             },
 
             Literal(literal) => { // vecot of single item
-                Ok(vec![literal.clone()])
+                Ok(vec![D::from(literal.clone())])
             },
 
             IndexShortcut(key, off, opt) => { // vector of single item
@@ -149,9 +148,14 @@ impl FnMut<(Json,)> for Thunk {
             },
 
             Slice(ref mut thunk, start, end, opt) => { // vector of one or more
+                use jq::Error::Op;
+
                 let mut outs = Vec::new();
                 for item in thunk(doc)?.into_iter() {
-                    let mut res = do_slice(*start, *end, item);
+                    let mut res = item.slice(*start, *end)
+                        .ok_or_else(
+                            || Op(None, "json not an array".to_string())
+                        );
                     if *opt && res.is_err() { continue }
                     outs.append(&mut res?);
                 }
@@ -174,7 +178,7 @@ impl FnMut<(Json,)> for Thunk {
             Neg(ref mut thunk) => do_neg(thunk, doc),
             Not(ref mut thunk) => do_not(thunk, doc),
 
-            Mult(ref mut lthunk, ref mut rthunk) => do_mult(lthunk, rthunk, doc),
+            Mult(ref mut lthunk, ref mut rthunk) => do_mul(lthunk, rthunk, doc),
             Div(ref mut lthunk, ref mut rthunk) => do_div(lthunk, rthunk, doc),
             Rem(ref mut lthunk, ref mut rthunk) => do_rem(lthunk, rthunk, doc),
 
@@ -204,60 +208,28 @@ impl FnMut<(Json,)> for Thunk {
     }
 }
 
-impl FnOnce<(Json,)> for Thunk {
-    type Output=Result<Output>;
+impl<D> FnOnce<(D,)> for Thunk where D: Document {
+    type Output=Result<Output<D>>;
 
-    extern "rust-call" fn call_once(mut self, args: (Json,)) -> Self::Output {
+    extern "rust-call" fn call_once(mut self, args: (D,)) -> Self::Output {
         self.call_mut(args)
     }
 }
 
-fn do_recurse(list: &mut Vec<Json>, doc: Json) {
-    use json::Json::{Null, Bool, Integer, Float, Array, Object, String as S};
-
-    match doc {
-        val@Null | val@Bool(_) | val@Integer(_) |
-        val@Float(_) | val@S(_) => list.push(val),
-        Array(val) => {
-            list.push(Array(val.clone()));
-            val.into_iter().for_each(|item| do_recurse(list, item))
-        },
-        Object(val) => {
-            list.push(Object(val.clone()));
-            val.into_iter().for_each(|item| do_recurse(list, item.1))
-        },
-    }
-}
-
-fn do_index_shortcut(key: &String, off: Option<usize>, doc: Json)
-    -> Result<Json>
+fn do_index_shortcut<D>(key: &String, off: Option<usize>, doc: D)
+    -> Result<D> where D: Document
 {
-    use json::Json::{Object, Array};
-
-    Ok(match (doc, off) {
-        (doc@Object(_), _) => doc.get(key)?,
-        (doc@Array(_), Some(off)) => doc.index(off)?,
-        (_, _) => {
-            return Err(Error::Op(None, "json not an object".to_string()))
+    match doc.clone().get(key) {
+        Ok(val) => Ok(val),
+        err@Err(_) => {
+            if let Some(off) = off { Ok(doc.index(off)?) } else { err }
         },
-    })
-}
-
-fn do_slice(start: usize, end: usize, doc: Json) -> Result<Output> {
-    use json::Json::{Array};
-
-    match doc {
-        Array(arr) => {
-            let end = if end == usize::max_value() { arr.len() } else { end };
-            let mut res = Vec::new();
-            arr[start..end].iter().for_each(|item| res.push(item.clone()));
-            Ok(res)
-        }
-        _ => return Err(Error::Op(None, "json not an array".to_string()))
     }
 }
 
-fn do_iterate(thunks: &mut Vec<Thunk>, opt: bool, doc: Json) -> Result<Output> {
+fn do_iterate<D>(thunks: &mut Vec<Thunk>, opt: bool, doc: D)
+    -> Result<Output<D>> where D: Document
+{
     let mut out = Vec::new();
     for thunk in thunks.iter_mut() {
         let mut res = thunk(doc.clone());
@@ -267,210 +239,250 @@ fn do_iterate(thunks: &mut Vec<Thunk>, opt: bool, doc: Json) -> Result<Output> {
     Ok(out)
 }
 
-fn do_list(thunks: &mut Vec<Thunk>, opt: bool, doc: Json) -> Result<Output> {
-    let mut out = Vec::new();
-    for thunk in thunks.iter_mut() {
-        let mut res = thunk(doc.clone());
-        if opt && res.is_err() { continue }
-        out.append(&mut res?)
-    }
-    Ok(vec![Json::Array(out)])
-}
-
-fn do_dict(kv_thunks: &mut Vec<(Thunk, Thunk)>, opt: bool, doc: Json)
-    -> Result<Output>
+fn do_list<D>(thunks: &mut Vec<Thunk>, _opt: bool, doc: D)
+    -> Result<Output<D>> where D: Document
 {
-    use json::Json::{String as S};
+    let iter = thunks.iter_mut().filter_map(|thunk| {
+        let res = thunk(doc.clone());
+        if res.is_err() { return None }
+        Some(res.unwrap())
+    });
 
-    let mut dicts: Vec<Json> = vec![Json::Object(vec![])];
-
-    let insert_dicts = |dicts: &mut Vec<Json>, kv: &KeyValue| {
-        dicts.iter_mut().for_each(|dict| { dict.upsert_key(kv.clone()); });
-    };
-
-    for kv_thunk in kv_thunks.iter_mut() {
-        let mut key_res = kv_thunk.0(doc.clone());
-        if opt && key_res.is_err() { continue }
-
-        let mut val_res = kv_thunk.1(doc.clone());
-        if opt && val_res.is_err() { continue }
-
-        let key_res = key_res?;
-        let val_res = val_res?;
-        for (i, key) in key_res.into_iter().enumerate() {
-            let mut kv = match key {
-                S(s) => KeyValue(s, Json::Null),
-                _ => continue
-            };
-            for (j, val) in val_res.clone().into_iter().enumerate() {
-                kv.1 = val;
-                if i == 0 && j == 0 {
-                    insert_dicts(&mut dicts, &kv);
-                    continue
-                }
-                let mut next_dicts = dicts.clone();
-                insert_dicts(&mut next_dicts, &kv);
-                dicts.append(&mut next_dicts);
-            }
-        }
-    }
-    Ok(dicts)
+    let val = { D::list_comprehend(iter) };
+    Ok(val)
 }
 
-fn do_neg(thunk: &mut Thunk, doc: Json) -> Result<Output> {
-    Ok(thunk(doc)?.into_iter().map(|x| -(&x)).collect())
+fn do_dict<D>(kv_thunks: &mut Vec<(Thunk, Thunk)>, _opt: bool, doc: D)
+    -> Result<Output<D>> where D: Document
+{
+    let iter = kv_thunks.iter_mut().filter_map(|kv_thunk| {
+        let key_res = kv_thunk.0(doc.clone());
+        if key_res.is_err() { return None }
+
+        let val_res = kv_thunk.1(doc.clone());
+        if val_res.is_err() { return None }
+
+        let keys = key_res.unwrap().into_iter()
+            .filter_map(|val| { val.string().ok() })
+            .collect();
+
+        Some((keys, val_res.unwrap()))
+    });
+
+    let val = D::map_comprehend(iter);
+    Ok(val)
 }
 
-fn do_not(thunk: &mut Thunk, doc: Json) -> Result<Output> {
-    Ok(thunk(doc)?.into_iter().map(|x| !(&x)).collect())
+fn do_neg<D>(thunk: &mut Thunk, doc: D) -> Result<Output<D>> where D: Document {
+    Ok(thunk(doc)?.into_iter().map(|x| -x).collect())
 }
 
-fn do_mult(lthunk: &mut Thunk, rthunk: &mut Thunk, doc:Json) -> Result<Output> {
-    Ok(lthunk(doc.clone())?.iter()
-                   .zip(rthunk(doc)?.iter())
-                   .map(|(x,y)| x*y).collect()
+fn do_not<D>(thunk: &mut Thunk, doc: D) -> Result<Output<D>> where D: Document {
+    Ok(thunk(doc)?.into_iter().map(|x| !x).collect())
+}
+
+fn do_mul<D>(lthunk: &mut Thunk, rthunk: &mut Thunk, doc: D)
+    -> Result<Output<D>> where D: Document
+{
+    Ok(lthunk(doc.clone())? // need to clone
+        .into_iter()
+        .zip(rthunk(doc)?.into_iter())
+        .map(|(x,y)| x*y)
+        .collect()
     )
 }
 
-fn do_div(lthunk: &mut Thunk, rthunk: &mut Thunk, doc:Json) -> Result<Output> {
-    Ok(lthunk(doc.clone())?.iter()
-                   .zip(rthunk(doc)?.iter())
-                   .map(|(x,y)| x/y).collect()
+fn do_div<D>(lthunk: &mut Thunk, rthunk: &mut Thunk, doc: D)
+    -> Result<Output<D>> where D: Document
+{
+    Ok(lthunk(doc.clone())? // need to clone
+        .into_iter()
+        .zip(rthunk(doc)?.into_iter())
+        .map(|(x,y)| x/y)
+        .collect()
     )
 }
 
-fn do_rem(lthunk: &mut Thunk, rthunk: &mut Thunk, doc:Json) -> Result<Output> {
-    Ok(lthunk(doc.clone())?.iter()
-                   .zip(rthunk(doc)?.iter())
-                   .map(|(x,y)| x%y).collect()
+fn do_rem<D>(lthunk: &mut Thunk, rthunk: &mut Thunk, doc: D)
+    -> Result<Output<D>> where D: Document
+{
+    Ok(lthunk(doc.clone())?
+        .into_iter()
+        .zip(rthunk(doc)?.into_iter())
+        .map(|(x,y)| x%y)
+        .collect()
     )
 }
 
-fn do_add(lthunk: &mut Thunk, rthunk: &mut Thunk, doc:Json) -> Result<Output> {
-    Ok(lthunk(doc.clone())?.iter()
-                   .zip(rthunk(doc)?.iter())
-                   .map(|(x,y)| x+y).collect()
+fn do_add<D>(lthunk: &mut Thunk, rthunk: &mut Thunk, doc: D)
+    -> Result<Output<D>> where D: Document
+{
+    Ok(lthunk(doc.clone())?
+        .into_iter()
+        .zip(rthunk(doc)?.into_iter())
+        .map(|(x,y)| x+y)
+        .collect()
     )
 }
 
-fn do_sub(lthunk: &mut Thunk, rthunk: &mut Thunk, doc:Json) -> Result<Output> {
-    Ok(lthunk(doc.clone())?.iter()
-                   .zip(rthunk(doc)?.iter())
-                   .map(|(x,y)| x-y).collect()
+fn do_sub<D>(lthunk: &mut Thunk, rthunk: &mut Thunk, doc: D)
+    -> Result<Output<D>> where D: Document
+{
+    Ok(lthunk(doc.clone())?
+        .into_iter()
+        .zip(rthunk(doc)?.into_iter())
+        .map(|(x,y)| x-y)
+        .collect()
     )
 }
 
-fn do_eq(lthunk: &mut Thunk, rthunk: &mut Thunk, doc: Json) -> Result<Output> {
-    use json::Json::{Bool};
-
-    Ok(lthunk(doc.clone())?.iter()
-                   .zip(rthunk(doc)?.iter())
-                   .map(|(x,y)| if x == y {Bool(true)} else {Bool(false)})
-                   .collect()
+fn do_eq<D>(lthunk: &mut Thunk, rthunk: &mut Thunk, doc: D)
+    -> Result<Output<D>> where D: Document
+{
+    Ok(lthunk(doc.clone())?
+        .iter()
+        .zip(rthunk(doc)?.iter())
+        .map(|(x,y)| D::from(x == y))
+        .collect()
     )
 }
 
-fn do_ne(lthunk: &mut Thunk, rthunk: &mut Thunk, doc: Json) -> Result<Output> {
-    use json::Json::{Bool};
-
-    Ok(lthunk(doc.clone())?.iter()
-                   .zip(rthunk(doc)?.iter())
-                   .map(|(x,y)| if x != y {Bool(true)} else {Bool(false)})
-                   .collect()
+fn do_ne<D>(lthunk: &mut Thunk, rthunk: &mut Thunk, doc: D)
+    -> Result<Output<D>> where D: Document
+{
+    Ok(lthunk(doc.clone())?
+        .iter()
+        .zip(rthunk(doc)?.iter())
+        .map(|(x,y)| D::from(x != y))
+        .collect()
     )
 }
 
-fn do_lt(lthunk: &mut Thunk, rthunk: &mut Thunk, doc: Json) -> Result<Output> {
-    use json::Json::{Bool};
-
-    Ok(lthunk(doc.clone())?.iter()
-                   .zip(rthunk(doc)?.iter())
-                   .map(|(x,y)| if x < y {Bool(true)} else {Bool(false)})
-                   .collect()
+fn do_lt<D>(lthunk: &mut Thunk, rthunk: &mut Thunk, doc: D)
+    -> Result<Output<D>> where D: Document
+{
+    Ok(lthunk(doc.clone())?
+        .iter()
+        .zip(rthunk(doc)?.iter())
+        .map(|(x,y)| D::from(x < y))
+        .collect()
     )
 }
 
-fn do_le(lthunk: &mut Thunk, rthunk: &mut Thunk, doc: Json) -> Result<Output> {
-    use json::Json::{Bool};
-
-    Ok(lthunk(doc.clone())?.iter()
-                   .zip(rthunk(doc)?.iter())
-                   .map(|(x,y)| if x <= y {Bool(true)} else {Bool(false)})
-                   .collect()
+fn do_le<D>(lthunk: &mut Thunk, rthunk: &mut Thunk, doc: D)
+    -> Result<Output<D>> where D: Document
+{
+    Ok(lthunk(doc.clone())?
+        .iter()
+        .zip(rthunk(doc)?.iter())
+        .map(|(x,y)| D::from(x <= y))
+        .collect()
     )
 }
 
-fn do_gt(lthunk: &mut Thunk, rthunk: &mut Thunk, doc: Json) -> Result<Output> {
-    use json::Json::{Bool};
-
-    Ok(lthunk(doc.clone())?.iter()
-                   .zip(rthunk(doc)?.iter())
-                   .map(|(x,y)| if x > y {Bool(true)} else {Bool(false)})
-                   .collect()
+fn do_gt<D>(lthunk: &mut Thunk, rthunk: &mut Thunk, doc: D)
+    -> Result<Output<D>> where D: Document
+{
+    Ok(lthunk(doc.clone())?
+        .iter()
+        .zip(rthunk(doc)?.iter())
+        .map(|(x,y)| D::from(x > y))
+        .collect()
     )
 }
 
-fn do_ge(lthunk: &mut Thunk, rthunk: &mut Thunk, doc: Json) -> Result<Output> {
-    use json::Json::{Bool};
-
-    Ok(lthunk(doc.clone())?.iter()
-                   .zip(rthunk(doc)?.iter())
-                   .map(|(x,y)| if x >= y {Bool(true)} else {Bool(false)})
-                   .collect()
+fn do_ge<D>(lthunk: &mut Thunk, rthunk: &mut Thunk, doc: D)
+    -> Result<Output<D>> where D: Document
+{
+    Ok(lthunk(doc.clone())?
+        .iter()
+        .zip(rthunk(doc)?.iter())
+        .map(|(x,y)| D::from(x >= y))
+        .collect()
     )
 }
 
-fn do_shr(lthunk: &mut Thunk, rthunk: &mut Thunk, doc: Json) -> Result<Output> {
-    Ok(lthunk(doc.clone())?.iter()
-                   .zip(rthunk(doc)?.iter())
-                   .map(|(x,y)| x>>y).collect()
+fn do_shr<D>(lthunk: &mut Thunk, rthunk: &mut Thunk, doc: D)
+    -> Result<Output<D>> where D: Document
+{
+    Ok(lthunk(doc.clone())?
+        .into_iter()
+        .zip(rthunk(doc)?.into_iter())
+        .map(|(x,y)| x>>y)
+        .collect()
     )
 }
 
-fn do_shl(lthunk: &mut Thunk, rthunk: &mut Thunk, doc: Json) -> Result<Output> {
-    Ok(lthunk(doc.clone())?.iter()
-                   .zip(rthunk(doc)?.iter())
-                   .map(|(x,y)| x<<y).collect()
+fn do_shl<D>(lthunk: &mut Thunk, rthunk: &mut Thunk, doc: D)
+    -> Result<Output<D>> where D: Document
+{
+    Ok(lthunk(doc.clone())?
+        .into_iter()
+        .zip(rthunk(doc)?.into_iter())
+        .map(|(x,y)| x<<y)
+        .collect()
     )
 }
 
-fn do_bitand(lthunk: &mut Thunk, rthunk: &mut Thunk, doc: Json) -> Result<Output> {
-    Ok(lthunk(doc.clone())?.iter()
-                   .zip(rthunk(doc)?.iter())
-                   .map(|(x,y)| x&y).collect()
+fn do_bitand<D>(lthunk: &mut Thunk, rthunk: &mut Thunk, doc: D)
+    -> Result<Output<D>> where D: Document
+{
+    Ok(lthunk(doc.clone())?
+        .into_iter()
+        .zip(rthunk(doc)?.into_iter())
+        .map(|(x,y)| x&y)
+        .collect()
     )
 }
 
-fn do_bitxor(lthunk: &mut Thunk, rthunk: &mut Thunk, doc: Json) -> Result<Output> {
-    Ok(lthunk(doc.clone())?.iter()
-                   .zip(rthunk(doc)?.iter())
-                   .map(|(x,y)| x^y).collect()
+fn do_bitxor<D>(lthunk: &mut Thunk, rthunk: &mut Thunk, doc: D)
+    -> Result<Output<D>> where D: Document
+{
+    Ok(lthunk(doc.clone())?
+        .into_iter()
+        .zip(rthunk(doc)?.into_iter())
+        .map(|(x,y)| x^y)
+        .collect()
     )
 }
 
-fn do_bitor(lthunk: &mut Thunk, rthunk: &mut Thunk, doc: Json) -> Result<Output> {
-    Ok(lthunk(doc.clone())?.iter()
-                   .zip(rthunk(doc)?.iter())
-                   .map(|(x,y)| x|y).collect()
+fn do_bitor<D>(lthunk: &mut Thunk, rthunk: &mut Thunk, doc: D)
+    -> Result<Output<D>> where D: Document
+{
+    Ok(lthunk(doc.clone())?
+        .into_iter()
+        .zip(rthunk(doc)?.into_iter())
+        .map(|(x,y)| x|y)
+        .collect()
     )
 }
 
-fn do_and(lthunk: &mut Thunk, rthunk: &mut Thunk, doc: Json) -> Result<Output> {
-    Ok(lthunk(doc.clone())?.iter()
-                   .zip(rthunk(doc)?.iter())
-                   .map(|(x,y)| x.and(y)).collect()
+fn do_and<D>(lthunk: &mut Thunk, rthunk: &mut Thunk, doc: D)
+    -> Result<Output<D>> where D: Document
+{
+    Ok(lthunk(doc.clone())?
+        .into_iter()
+        .zip(rthunk(doc)?.into_iter())
+        .map(|(x,y)| x.and(y))
+        .collect()
     )
 }
 
-fn do_or(lthunk: &mut Thunk, rthunk: &mut Thunk, doc: Json) -> Result<Output> {
-    Ok(lthunk(doc.clone())?.iter()
-                   .zip(rthunk(doc)?.iter())
-                   .map(|(x,y)| x.or(y)).collect()
+fn do_or<D>(lthunk: &mut Thunk, rthunk: &mut Thunk, doc: D)
+    -> Result<Output<D>> where D: Document
+{
+    Ok(lthunk(doc.clone())?
+        .into_iter()
+        .zip(rthunk(doc)?.into_iter())
+        .map(|(x,y)| x.or(y))
+        .collect()
     )
 }
 
 
-fn do_pipe(lthunk: &mut Thunk, rthunk: &mut Thunk, doc: Json) -> Result<Output> {
+fn do_pipe<D>(lthunk: &mut Thunk, rthunk: &mut Thunk, doc: D)
+    -> Result<Output<D>> where D: Document
+{
     let mut outs = Vec::new();
     for item in lthunk(doc)? {
         let mut out = rthunk(item)?;

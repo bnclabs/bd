@@ -2,12 +2,14 @@ use std::{self, result, char, error, io};
 use std::str::{self, FromStr,CharIndices};
 use std::fmt::{self, Write};
 use std::cmp::Ordering;
-use std::ops::{Neg, Not, Mul, Div, Rem, Add, Sub, Shr, Shl, BitAnd, BitXor};
-use std::ops::{BitOr, Index, IndexMut};
+use std::ops::{Neg, Not, Mul, Div, Rem, Add, Sub, Shr, Shl};
+use std::ops::{BitAnd, BitXor, BitOr, Index, IndexMut};
 use std::ops::{Range, RangeFrom, RangeTo, RangeToInclusive, RangeInclusive};
 use std::ops::{RangeFull};
+use document::{And, Or, Document, Recurse, Slice, Comprehension};
 
 use lex::Lex;
+use jq;
 
 include!("./json.rs.lookup");
 
@@ -518,16 +520,8 @@ impl Json {
         match self { Json::Array(_) => true, _ => false }
     }
 
-    pub fn is_bool(&self) -> bool {
+    pub fn is_object(&self) -> bool {
         match self { Json::Object(_) => true, _ => false }
-    }
-
-    pub fn string(self) -> Result<String> {
-        use self::Json::{String as S};
-        match self {
-            S(s) => Ok(s),
-            _ => Err(Error::NotMyType("json not a string".to_string()))
-        }
     }
 
     pub fn array_ref(&self) -> Result<&Vec<Json>> {
@@ -621,7 +615,15 @@ impl Json {
         text.push('"');
     }
 
-    pub fn index(self, off: usize) -> Result<Json> {
+    fn string(self) -> Result<String> {
+        use self::Json::{String as S};
+        match self {
+            S(s) => Ok(s),
+            _ => Err(Error::NotMyType("not a string".to_string())),
+        }
+    }
+
+    fn index(self, off: usize) -> Result<Json> {
         match self {
             Json::Array(mut a) => if off < a.len() {
                     Ok(a.remove(off))
@@ -671,22 +673,67 @@ impl Json {
         o.insert(i, kv);
     }
 
-    pub fn and(&self, other: &Json) -> Json {
-        use json::Json::{Null, Bool};
+    pub fn do_recurse(&self, list: &mut Vec<Json>) {
+        use json::Json::{Null,Bool,Integer,Float,String as S,Array,Object};
 
-        let lhs = match self { Null | Bool(false) => false, _ => true };
-        let rhs = match other { Null | Bool(false) => false, _ => true };
-        Bool(lhs & rhs)
-    }
-
-    pub fn or(&self, other: &Json) -> Json {
-        use json::Json::{Null, Bool};
-
-        let lhs = match self { Null | Bool(false) => false, _ => true };
-        let rhs = match other { Null | Bool(false) => false, _ => true };
-        Bool(lhs | rhs)
+        match self {
+            Null => list.push(Null),
+            val@Bool(_) | val@Integer(_) |
+            val@Float(_) | val@S(_) => list.push(val.clone()),
+            Array(val) => {
+                list.push(Array(val.clone()));
+                val.iter().for_each(|item| item.do_recurse(list))
+            },
+            Object(val) => {
+                list.push(Object(val.clone()));
+                val.iter().for_each(|item| item.1.do_recurse(list))
+            },
+        }
     }
 }
+
+impl From<bool> for Json {
+    fn from(val: bool) -> Json {
+        Json::Bool(val)
+    }
+}
+
+impl From<Json> for bool {
+    fn from(val: Json) -> bool {
+        match val { Json::Null | Json::Bool(false) => false, _ => true }
+    }
+}
+
+impl FromStr for Json {
+    type Err=Error;
+
+    fn from_str(s: &str) -> Result<Json> {
+        JsonBuf::parse_str(s)
+    }
+}
+
+impl fmt::Display for Json {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        let mut s = String::new();
+        self.to_json(&mut s);
+        write!(f, "{}", s)
+    }
+}
+
+impl Document for Json {
+    fn string(self) -> jq::Result<String> {
+        Ok(self.string()?)
+    }
+
+    fn index(self, off: usize) -> jq::Result<Json> {
+        Ok(self.index(off)?)
+    }
+
+    fn get<'a>(self, key: &'a str) -> jq::Result<Json> {
+        Ok(self.get(key)?)
+    }
+}
+
 
 impl Index<usize> for Json {
     type Output=Json;
@@ -764,7 +811,7 @@ impl Index<RangeFull> for Json {
     }
 }
 
-impl<'a> Neg for &'a Json {
+impl Neg for Json {
     type Output=Json;
 
     fn neg(self) -> Json {
@@ -776,7 +823,7 @@ impl<'a> Neg for &'a Json {
     }
 }
 
-impl<'a> Not for &'a Json {
+impl Not for Json {
     type Output=Json;
 
     fn not(self) -> Json {
@@ -787,24 +834,24 @@ impl<'a> Not for &'a Json {
     }
 }
 
-impl<'a> Mul for &'a Json {
+impl Mul for Json {
     type Output=Json;
 
-    fn mul(self, rhs: &Json) -> Json {
+    fn mul(self, rhs: Json) -> Json {
         use json::Json::{Null,Bool,Integer,Float,Array,Object, String as S};
 
         match (self, rhs) {
             (Integer(l), Integer(r)) => Integer(l*r),
-            (Integer(l), Float(r)) => Float((*l as f64)*r),
-            (Integer(_), val) => val.mul(self),
+            (Integer(l), Float(r)) => Float((l as f64) * r),
+            (lhs@Integer(_), rhs) => rhs.mul(lhs),
             (Float(l), Float(r)) => Float(l*r),
-            (Float(l), Integer(r)) => Float(l*(*r as f64)),
-            (Float(_), val) => val.mul(self),
+            (Float(l), Integer(r)) => Float(l*(r as f64)),
+            (lhs@Float(_), rhs) => rhs.mul(lhs),
             (Null, _) => Null,
             (Bool(false), _) => Null,
             (Bool(true), val) => val.clone(),
             (S(_), Integer(0)) => Null,
-            (S(s), Integer(n)) => S(s.repeat(*n as usize)),
+            (S(s), Integer(n)) => S(s.repeat(n as usize)),
             (S(_), _) => Null,
             (Object(o), Bool(true)) => Object(o.clone()),
             (Object(this), Object(other)) => {
@@ -816,7 +863,7 @@ impl<'a> Mul for &'a Json {
             (Object(_), _) => Null,
             (Array(a), Integer(n)) => {
                 let mut v = vec![];
-                (0..*n).for_each(|_| v.extend_from_slice(a));
+                (0..n).for_each(|_| v.extend_from_slice(&a));
                 Array(v)
             },
             (Array(a), Bool(true)) => Array(a.clone()),
@@ -825,70 +872,70 @@ impl<'a> Mul for &'a Json {
     }
 }
 
-impl<'a> Div for &'a Json {
+impl Div for Json {
     type Output=Json;
 
-    fn div(self, rhs: &Json) -> Json {
+    fn div(self, rhs: Json) -> Json {
         use json::Json::{Null,Integer,Float,String as S};
 
         match (self, rhs) {
             (Integer(_), Integer(0)) => Null,
             (Integer(l), Integer(r)) => Integer(l/r),
-            (Integer(_), Float(f)) if *f == 0.0 => Null,
-            (Integer(l), Float(r)) => Float((*l as f64)/r),
-            (Integer(_), val) => val.div(self),
+            (Integer(_), Float(f)) if f == 0.0 => Null,
+            (Integer(l), Float(r)) => Float((l as f64)/r),
+            (lhs@Integer(_), rhs) => rhs.div(lhs),
             (Float(l), Float(r)) => Float(l/r),
-            (Float(l), Integer(r)) => Float(l/(*r as f64)),
-            (Float(_), val) => val.div(self),
+            (Float(l), Integer(r)) => Float(l/(r as f64)),
+            (lhs@Float(_), rhs) => rhs.div(lhs),
             (S(s), S(patt)) => {
-                Json::Array(s.split(patt).map(|s| S(s.to_string())).collect())
+                Json::Array(s.split(&patt).map(|s| S(s.to_string())).collect())
             },
             (_, _) => Null,
         }
     }
 }
 
-impl<'a> Rem for &'a Json {
+impl Rem for Json {
     type Output=Json;
 
-    fn rem(self, rhs: &Json) -> Json {
+    fn rem(self, rhs: Json) -> Json {
         use json::Json::{Null,Integer,Float};
 
         match (self, rhs) {
             (Integer(_), Integer(0)) => Null,
             (Integer(l), Integer(r)) => Integer(l%r),
-            (Integer(_), Float(f)) if *f == 0.0 => Null,
-            (Integer(l), Float(r)) => Float((*l as f64)%r),
-            (Integer(_), val) => val.rem(self),
+            (Integer(_), Float(f)) if f == 0.0 => Null,
+            (Integer(l), Float(r)) => Float((l as f64)%r),
+            (lhs@Integer(_), rhs) => rhs.rem(lhs),
             (Float(l), Float(r)) => Float(l%r),
-            (Float(l), Integer(r)) => Float(l%(*r as f64)),
-            (Float(_), val) => val.rem(self),
+            (Float(l), Integer(r)) => Float(l%(r as f64)),
+            (lhs@Float(_), rhs) => rhs.rem(lhs),
             (_, _) => Null,
         }
     }
 }
 
-impl<'a> Add for &'a Json {
+impl Add for Json {
     type Output=Json;
 
-    fn add(self, rhs: &Json) -> Json {
+    fn add(self, rhs: Json) -> Json {
         use json::Json::{Null,Integer,Float,Array,Object, String as S};
 
         match (self, rhs) {
             (Integer(l), Integer(r)) => Integer(l+r),
-            (Integer(l), Float(r)) => Float((*l as f64)+r),
-            (Integer(_), val) => val.add(self),
+            (Integer(l), Float(r)) => Float((l as f64)+r),
+            (lhs@Integer(_), rhs) => rhs.add(lhs),
             (Float(l), Float(r)) => Float(l+r),
-            (Float(l), Integer(r)) => Float(l+(*r as f64)),
-            (Float(_), val) => val.add(self),
+            (Float(l), Integer(r)) => Float(l+(r as f64)),
+            (lhs@Float(_), rhs) => rhs.add(lhs),
             (S(l), S(r)) => {
-                let mut s = String::new(); s.push_str(l); s.push_str(r);
+                let mut s = String::new(); s.push_str(&l); s.push_str(&r);
                 S(s)
             }
             (Array(l), Array(r)) => {
                 let mut a = vec![];
-                a.extend_from_slice(l);
-                a.extend_from_slice(r);
+                a.extend_from_slice(&l);
+                a.extend_from_slice(&r);
                 Array(a)
             }
             (Object(l), Object(r)) => {
@@ -902,28 +949,28 @@ impl<'a> Add for &'a Json {
     }
 }
 
-impl<'a> Sub for &'a Json {
+impl Sub for Json {
     type Output=Json;
 
-    fn sub(self, rhs: &Json) -> Json {
+    fn sub(self, rhs: Json) -> Json {
         use json::Json::{Null,Integer,Float};
 
         match (self, rhs) {
             (Integer(l), Integer(r)) => Integer(l-r),
-            (Integer(l), Float(r)) => Float((*l as f64)-r),
-            (Integer(_), val) => val.sub(self),
+            (Integer(l), Float(r)) => Float((l as f64)-r),
+            (lhs@Integer(_), rhs) => rhs.sub(lhs),
             (Float(l), Float(r)) => Float(l-r),
-            (Float(l), Integer(r)) => Float(l-(*r as f64)),
-            (Float(_), val) => val.sub(self),
+            (Float(l), Integer(r)) => Float(l-(r as f64)),
+            (lhs@Float(_), rhs) => rhs.sub(lhs),
             (_, _) => Null,
         }
     }
 }
 
-impl<'a> Shr for &'a Json {
+impl Shr for Json {
     type Output=Json;
 
-    fn shr(self, rhs: &Json) -> Json {
+    fn shr(self, rhs: Json) -> Json {
         match (self, rhs) {
             (Json::Integer(l), Json::Integer(r)) => Json::Integer(l>>r),
             (_, _) => Json::Null,
@@ -931,10 +978,10 @@ impl<'a> Shr for &'a Json {
     }
 }
 
-impl<'a> Shl for &'a Json {
+impl Shl for Json {
     type Output=Json;
 
-    fn shl(self, rhs: &Json) -> Json {
+    fn shl(self, rhs: Json) -> Json {
         match (self, rhs) {
             (Json::Integer(l), Json::Integer(r)) => Json::Integer(l<<r),
             (_, _) => Json::Null,
@@ -942,10 +989,10 @@ impl<'a> Shl for &'a Json {
     }
 }
 
-impl<'a> BitAnd for &'a Json {
+impl BitAnd for Json {
     type Output=Json;
 
-    fn bitand(self, rhs: &Json) -> Json {
+    fn bitand(self, rhs: Json) -> Json {
         match (self, rhs) {
             (Json::Integer(l), Json::Integer(r)) => Json::Integer(l&r),
             (_, _) => Json::Null,
@@ -953,10 +1000,10 @@ impl<'a> BitAnd for &'a Json {
     }
 }
 
-impl<'a> BitXor for &'a Json {
+impl BitXor for Json {
     type Output=Json;
 
-    fn bitxor(self, rhs: &Json) -> Json {
+    fn bitxor(self, rhs: Json) -> Json {
         match (self, rhs) {
             (Json::Integer(l), Json::Integer(r)) => Json::Integer(l^r),
             (_, _) => Json::Null,
@@ -964,10 +1011,10 @@ impl<'a> BitXor for &'a Json {
     }
 }
 
-impl<'a> BitOr for &'a Json {
+impl BitOr for Json {
     type Output=Json;
 
-    fn bitor(self, rhs: &Json) -> Json {
+    fn bitor(self, rhs: Json) -> Json {
         match (self, rhs) {
             (Json::Integer(l), Json::Integer(r)) => Json::Integer(l|r),
             (_, _) => Json::Null,
@@ -975,23 +1022,89 @@ impl<'a> BitOr for &'a Json {
     }
 }
 
+impl And for Json {
+    type Output=Json;
 
-impl FromStr for Json {
-    type Err=Error;
-
-    fn from_str(s: &str) -> Result<Json> {
-        JsonBuf::parse_str(s)
+    fn and(self, other: Json) -> Self::Output {
+        let lhs = bool::from(self);
+        let rhs = bool::from(other);
+        Json::Bool(lhs & rhs)
     }
 }
 
-impl fmt::Display for Json {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        let mut s = String::new();
-        self.to_json(&mut s);
-        write!(f, "{}", s)
+impl Or for Json {
+    type Output=Json;
+
+    fn or(self, other: Json) -> Self::Output {
+        let lhs = bool::from(self);
+        let rhs = bool::from(other);
+        Json::Bool(lhs | rhs)
     }
 }
 
+impl Recurse for Json {
+    fn recurse(&self) -> Vec<Json> {
+        let mut list = Vec::new();
+        self.do_recurse(&mut list);
+        list
+    }
+
+}
+
+impl Slice for Json {
+    fn slice(self, start: usize, end: usize) -> Option<Vec<Json>> {
+        use json::Json::Array;
+
+        match self {
+            Array(arr) => {
+                let end = if end == usize::max_value() { arr.len() } else { end };
+                let mut res = Vec::new();
+                arr[start..end].iter().for_each(|item| res.push(item.clone()));
+                Some(res)
+            },
+            _ => None,
+        }
+    }
+}
+
+
+impl Comprehension for Json {
+    type Output=Vec<Json>;
+
+    fn list_comprehend(iter: impl Iterator<Item=Vec<Json>>) -> Vec<Json> {
+        let mut out = Vec::new();
+        for mut items in iter {
+            out.append(&mut items)
+        }
+        vec![Json::Array(out)]
+    }
+
+    fn map_comprehend(iter: impl Iterator<Item=(Vec<String>, Vec<Json>)>)
+        -> Vec<Json>
+    {
+        let mut dicts: Vec<Json> = vec![Json::Object(vec![])];
+
+        let insert_dicts = |dicts: &mut Vec<Json>, kv: &KeyValue| {
+            dicts.iter_mut().for_each(|dict| { dict.upsert_key(kv.clone()); });
+        };
+
+        for (keys, vals) in iter {
+            for (i, key) in keys.into_iter().enumerate() {
+                for (j, val) in vals.clone().into_iter().enumerate() {
+                    let kv = KeyValue(key.clone(), val);
+                    if i == 0 && j == 0 {
+                        insert_dicts(&mut dicts, &kv);
+                        continue
+                    }
+                    let mut next_dicts = dicts.clone();
+                    insert_dicts(&mut next_dicts, &kv);
+                    dicts.append(&mut next_dicts);
+                }
+            }
+        }
+        dicts
+    }
+}
 
 pub fn search_by_key(obj: &Vec<KeyValue>, key: &str) -> Result<usize> {
     use std::cmp::Ordering::{Greater, Equal, Less};

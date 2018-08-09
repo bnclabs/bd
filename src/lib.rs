@@ -5,6 +5,7 @@
 #![feature(fn_traits)]
 #![feature(box_patterns)]
 #![feature(slice_index_methods)]
+#![feature(associated_type_defaults)]
 
 
 extern crate test;
@@ -14,6 +15,7 @@ extern crate regex;
 pub mod json;
 pub mod jq;
 mod jqnom;
+mod document;
 mod lex;
 
 #[cfg(test)]
