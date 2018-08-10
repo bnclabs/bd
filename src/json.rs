@@ -709,11 +709,13 @@ impl fmt::Display for Json {
 }
 
 impl Document for Json {
+    type Err=Error;
+
     fn string(self) -> jq::Result<String> {
         Ok(self.string()?)
     }
 
-    fn index(self, off: usize) -> jq::Result<Json> {
+    fn index(self, off: usize) -> result::Result<Json, Error> {
         Ok(self.index(off)?)
     }
 

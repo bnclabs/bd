@@ -2,6 +2,7 @@ use std::ops::{Neg, Not, Mul, Div, Rem, Add, Sub};
 use std::ops::{Shr, Shl, BitAnd, BitXor, BitOr};
 use std::iter::{Iterator};
 use std::convert::{From};
+use std::result;
 
 use json::Json;
 use jq;
@@ -18,9 +19,11 @@ pub trait Document :
     And<Output=Self> + Or<Output=Self> +
     Recurse + Slice + Comprehension {
 
+    type Err;
+
     fn string(self) -> jq::Result<String>;
 
-    fn index(self, off: usize) -> jq::Result<Self>;
+    fn index(self, off: usize) -> result::Result<Self, Self::Err>;
 
     fn get<'a>(self, key: &'a str) -> jq::Result<Self>;
 }

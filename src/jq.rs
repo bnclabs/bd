@@ -119,7 +119,9 @@ pub enum Thunk where {
     Builtin(String, Vec<Thunk>),
 }
 
-impl<D> FnMut<(D,)> for Thunk where D: Document {
+impl<D> FnMut<(D,)> for Thunk
+    where D: Document, Error: From<<D as Document>::Err>
+{
     extern "rust-call" fn call_mut(&mut self, args: (D,)) -> Self::Output {
         use jq::Thunk::*;
 
@@ -208,7 +210,9 @@ impl<D> FnMut<(D,)> for Thunk where D: Document {
     }
 }
 
-impl<D> FnOnce<(D,)> for Thunk where D: Document {
+impl<D> FnOnce<(D,)> for Thunk
+    where D: Document, Error: From<<D as Document>::Err>
+{
     type Output=Result<Output<D>>;
 
     extern "rust-call" fn call_once(mut self, args: (D,)) -> Self::Output {
@@ -217,7 +221,7 @@ impl<D> FnOnce<(D,)> for Thunk where D: Document {
 }
 
 fn do_index_shortcut<D>(key: &String, off: Option<usize>, doc: D)
-    -> Result<D> where D: Document
+    -> Result<D> where D: Document, Error: From<<D as Document>::Err>
 {
     match doc.clone().get(key) {
         Ok(val) => Ok(val),
@@ -228,7 +232,7 @@ fn do_index_shortcut<D>(key: &String, off: Option<usize>, doc: D)
 }
 
 fn do_iterate<D>(thunks: &mut Vec<Thunk>, opt: bool, doc: D)
-    -> Result<Output<D>> where D: Document
+    -> Result<Output<D>> where D: Document, Error: From<<D as Document>::Err>
 {
     let mut out = Vec::new();
     for thunk in thunks.iter_mut() {
@@ -240,7 +244,7 @@ fn do_iterate<D>(thunks: &mut Vec<Thunk>, opt: bool, doc: D)
 }
 
 fn do_list<D>(thunks: &mut Vec<Thunk>, _opt: bool, doc: D)
-    -> Result<Output<D>> where D: Document
+    -> Result<Output<D>> where D: Document, Error: From<<D as Document>::Err>
 {
     let iter = thunks.iter_mut().filter_map(|thunk| {
         let res = thunk(doc.clone());
@@ -253,7 +257,7 @@ fn do_list<D>(thunks: &mut Vec<Thunk>, _opt: bool, doc: D)
 }
 
 fn do_dict<D>(kv_thunks: &mut Vec<(Thunk, Thunk)>, _opt: bool, doc: D)
-    -> Result<Output<D>> where D: Document
+    -> Result<Output<D>> where D: Document, Error: From<<D as Document>::Err>
 {
     let iter = kv_thunks.iter_mut().filter_map(|kv_thunk| {
         let key_res = kv_thunk.0(doc.clone());
@@ -273,16 +277,20 @@ fn do_dict<D>(kv_thunks: &mut Vec<(Thunk, Thunk)>, _opt: bool, doc: D)
     Ok(val)
 }
 
-fn do_neg<D>(thunk: &mut Thunk, doc: D) -> Result<Output<D>> where D: Document {
+fn do_neg<D>(thunk: &mut Thunk, doc: D)
+    -> Result<Output<D>> where D: Document, Error: From<<D as Document>::Err>
+{
     Ok(thunk(doc)?.into_iter().map(|x| -x).collect())
 }
 
-fn do_not<D>(thunk: &mut Thunk, doc: D) -> Result<Output<D>> where D: Document {
+fn do_not<D>(thunk: &mut Thunk, doc: D)
+    -> Result<Output<D>> where D: Document, Error: From<<D as Document>::Err>
+{
     Ok(thunk(doc)?.into_iter().map(|x| !x).collect())
 }
 
 fn do_mul<D>(lthunk: &mut Thunk, rthunk: &mut Thunk, doc: D)
-    -> Result<Output<D>> where D: Document
+    -> Result<Output<D>> where D: Document, Error: From<<D as Document>::Err>
 {
     Ok(lthunk(doc.clone())? // need to clone
         .into_iter()
@@ -293,7 +301,7 @@ fn do_mul<D>(lthunk: &mut Thunk, rthunk: &mut Thunk, doc: D)
 }
 
 fn do_div<D>(lthunk: &mut Thunk, rthunk: &mut Thunk, doc: D)
-    -> Result<Output<D>> where D: Document
+    -> Result<Output<D>> where D: Document, Error: From<<D as Document>::Err>
 {
     Ok(lthunk(doc.clone())? // need to clone
         .into_iter()
@@ -304,7 +312,7 @@ fn do_div<D>(lthunk: &mut Thunk, rthunk: &mut Thunk, doc: D)
 }
 
 fn do_rem<D>(lthunk: &mut Thunk, rthunk: &mut Thunk, doc: D)
-    -> Result<Output<D>> where D: Document
+    -> Result<Output<D>> where D: Document, Error: From<<D as Document>::Err>
 {
     Ok(lthunk(doc.clone())?
         .into_iter()
@@ -315,7 +323,7 @@ fn do_rem<D>(lthunk: &mut Thunk, rthunk: &mut Thunk, doc: D)
 }
 
 fn do_add<D>(lthunk: &mut Thunk, rthunk: &mut Thunk, doc: D)
-    -> Result<Output<D>> where D: Document
+    -> Result<Output<D>> where D: Document, Error: From<<D as Document>::Err>
 {
     Ok(lthunk(doc.clone())?
         .into_iter()
@@ -326,7 +334,7 @@ fn do_add<D>(lthunk: &mut Thunk, rthunk: &mut Thunk, doc: D)
 }
 
 fn do_sub<D>(lthunk: &mut Thunk, rthunk: &mut Thunk, doc: D)
-    -> Result<Output<D>> where D: Document
+    -> Result<Output<D>> where D: Document, Error: From<<D as Document>::Err>
 {
     Ok(lthunk(doc.clone())?
         .into_iter()
@@ -337,7 +345,7 @@ fn do_sub<D>(lthunk: &mut Thunk, rthunk: &mut Thunk, doc: D)
 }
 
 fn do_eq<D>(lthunk: &mut Thunk, rthunk: &mut Thunk, doc: D)
-    -> Result<Output<D>> where D: Document
+    -> Result<Output<D>> where D: Document, Error: From<<D as Document>::Err>
 {
     Ok(lthunk(doc.clone())?
         .iter()
@@ -348,7 +356,7 @@ fn do_eq<D>(lthunk: &mut Thunk, rthunk: &mut Thunk, doc: D)
 }
 
 fn do_ne<D>(lthunk: &mut Thunk, rthunk: &mut Thunk, doc: D)
-    -> Result<Output<D>> where D: Document
+    -> Result<Output<D>> where D: Document, Error: From<<D as Document>::Err>
 {
     Ok(lthunk(doc.clone())?
         .iter()
@@ -359,7 +367,7 @@ fn do_ne<D>(lthunk: &mut Thunk, rthunk: &mut Thunk, doc: D)
 }
 
 fn do_lt<D>(lthunk: &mut Thunk, rthunk: &mut Thunk, doc: D)
-    -> Result<Output<D>> where D: Document
+    -> Result<Output<D>> where D: Document, Error: From<<D as Document>::Err>
 {
     Ok(lthunk(doc.clone())?
         .iter()
@@ -370,7 +378,7 @@ fn do_lt<D>(lthunk: &mut Thunk, rthunk: &mut Thunk, doc: D)
 }
 
 fn do_le<D>(lthunk: &mut Thunk, rthunk: &mut Thunk, doc: D)
-    -> Result<Output<D>> where D: Document
+    -> Result<Output<D>> where D: Document, Error: From<<D as Document>::Err>
 {
     Ok(lthunk(doc.clone())?
         .iter()
@@ -381,7 +389,7 @@ fn do_le<D>(lthunk: &mut Thunk, rthunk: &mut Thunk, doc: D)
 }
 
 fn do_gt<D>(lthunk: &mut Thunk, rthunk: &mut Thunk, doc: D)
-    -> Result<Output<D>> where D: Document
+    -> Result<Output<D>> where D: Document, Error: From<<D as Document>::Err>
 {
     Ok(lthunk(doc.clone())?
         .iter()
@@ -392,7 +400,7 @@ fn do_gt<D>(lthunk: &mut Thunk, rthunk: &mut Thunk, doc: D)
 }
 
 fn do_ge<D>(lthunk: &mut Thunk, rthunk: &mut Thunk, doc: D)
-    -> Result<Output<D>> where D: Document
+    -> Result<Output<D>> where D: Document, Error: From<<D as Document>::Err>
 {
     Ok(lthunk(doc.clone())?
         .iter()
@@ -403,7 +411,7 @@ fn do_ge<D>(lthunk: &mut Thunk, rthunk: &mut Thunk, doc: D)
 }
 
 fn do_shr<D>(lthunk: &mut Thunk, rthunk: &mut Thunk, doc: D)
-    -> Result<Output<D>> where D: Document
+    -> Result<Output<D>> where D: Document, Error: From<<D as Document>::Err>
 {
     Ok(lthunk(doc.clone())?
         .into_iter()
@@ -414,7 +422,7 @@ fn do_shr<D>(lthunk: &mut Thunk, rthunk: &mut Thunk, doc: D)
 }
 
 fn do_shl<D>(lthunk: &mut Thunk, rthunk: &mut Thunk, doc: D)
-    -> Result<Output<D>> where D: Document
+    -> Result<Output<D>> where D: Document, Error: From<<D as Document>::Err>
 {
     Ok(lthunk(doc.clone())?
         .into_iter()
@@ -425,7 +433,7 @@ fn do_shl<D>(lthunk: &mut Thunk, rthunk: &mut Thunk, doc: D)
 }
 
 fn do_bitand<D>(lthunk: &mut Thunk, rthunk: &mut Thunk, doc: D)
-    -> Result<Output<D>> where D: Document
+    -> Result<Output<D>> where D: Document, Error: From<<D as Document>::Err>
 {
     Ok(lthunk(doc.clone())?
         .into_iter()
@@ -436,7 +444,7 @@ fn do_bitand<D>(lthunk: &mut Thunk, rthunk: &mut Thunk, doc: D)
 }
 
 fn do_bitxor<D>(lthunk: &mut Thunk, rthunk: &mut Thunk, doc: D)
-    -> Result<Output<D>> where D: Document
+    -> Result<Output<D>> where D: Document, Error: From<<D as Document>::Err>
 {
     Ok(lthunk(doc.clone())?
         .into_iter()
@@ -447,7 +455,7 @@ fn do_bitxor<D>(lthunk: &mut Thunk, rthunk: &mut Thunk, doc: D)
 }
 
 fn do_bitor<D>(lthunk: &mut Thunk, rthunk: &mut Thunk, doc: D)
-    -> Result<Output<D>> where D: Document
+    -> Result<Output<D>> where D: Document, Error: From<<D as Document>::Err>
 {
     Ok(lthunk(doc.clone())?
         .into_iter()
@@ -458,7 +466,7 @@ fn do_bitor<D>(lthunk: &mut Thunk, rthunk: &mut Thunk, doc: D)
 }
 
 fn do_and<D>(lthunk: &mut Thunk, rthunk: &mut Thunk, doc: D)
-    -> Result<Output<D>> where D: Document
+    -> Result<Output<D>> where D: Document, Error: From<<D as Document>::Err>
 {
     Ok(lthunk(doc.clone())?
         .into_iter()
@@ -469,7 +477,7 @@ fn do_and<D>(lthunk: &mut Thunk, rthunk: &mut Thunk, doc: D)
 }
 
 fn do_or<D>(lthunk: &mut Thunk, rthunk: &mut Thunk, doc: D)
-    -> Result<Output<D>> where D: Document
+    -> Result<Output<D>> where D: Document, Error: From<<D as Document>::Err>
 {
     Ok(lthunk(doc.clone())?
         .into_iter()
@@ -481,7 +489,7 @@ fn do_or<D>(lthunk: &mut Thunk, rthunk: &mut Thunk, doc: D)
 
 
 fn do_pipe<D>(lthunk: &mut Thunk, rthunk: &mut Thunk, doc: D)
-    -> Result<Output<D>> where D: Document
+    -> Result<Output<D>> where D: Document, Error: From<<D as Document>::Err>
 {
     let mut outs = Vec::new();
     for item in lthunk(doc)? {
