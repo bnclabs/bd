@@ -144,9 +144,14 @@ impl<D> FnMut<(D,)> for Thunk
             },
 
             IndexShortcut(key, off, opt) => { // vector of single item
-                let res = do_index_shortcut(key, *off, doc);
-                if *opt && res.is_err() { return Ok(vec![]) }
-                Ok(vec![res.unwrap()])
+                let res = do_obj_shortcut(key, doc.clone());
+                if res.is_err() {
+                    let res = do_index_shortcut(*off, doc);
+                    if *opt && res.is_err() { return Ok(vec![]) }
+                    Ok(vec![res.unwrap()])
+                } else {
+                    Ok(vec![res.unwrap()])
+                }
             },
 
             Slice(ref mut thunk, start, end, opt) => { // vector of one or more
@@ -220,14 +225,18 @@ impl<D> FnOnce<(D,)> for Thunk
     }
 }
 
-fn do_index_shortcut<D>(key: &String, off: Option<usize>, doc: D)
+fn do_obj_shortcut<D>(key: &String, doc: D)
     -> Result<D> where D: Document, Error: From<<D as Document>::Err>
 {
-    match doc.clone().get(key) {
-        Ok(val) => Ok(val),
-        err@Err(_) => {
-            if let Some(off) = off { Ok(doc.index(off)?) } else { err }
-        },
+    Ok(doc.get(key)?)
+}
+
+fn do_index_shortcut<D>(off: Option<usize>, doc: D)
+    -> Result<D> where D: Document, Error: From<<D as Document>::Err>
+{
+    match off {
+        Some(off) => Ok(doc.index(off)?),
+        None => Err(Error::Op(None, "json not an array".to_string())),
     }
 }
 

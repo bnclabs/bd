@@ -9,7 +9,6 @@ use std::ops::{RangeFull};
 use document::{And, Or, Document, Recurse, Slice, Comprehension};
 
 use lex::Lex;
-use jq;
 
 include!("./json.rs.lookup");
 
@@ -711,15 +710,15 @@ impl fmt::Display for Json {
 impl Document for Json {
     type Err=Error;
 
-    fn string(self) -> jq::Result<String> {
+    fn string(self) -> Result<String> {
         Ok(self.string()?)
     }
 
-    fn index(self, off: usize) -> result::Result<Json, Error> {
+    fn index(self, off: usize) -> Result<Json> {
         Ok(self.index(off)?)
     }
 
-    fn get<'a>(self, key: &'a str) -> jq::Result<Json> {
+    fn get<'a>(self, key: &'a str) -> Result<Json> {
         Ok(self.get(key)?)
     }
 }

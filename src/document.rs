@@ -5,7 +5,6 @@ use std::convert::{From};
 use std::result;
 
 use json::Json;
-use jq;
 
 // TODO: why should document be marked as Sized ?
 pub trait Document :
@@ -21,11 +20,11 @@ pub trait Document :
 
     type Err;
 
-    fn string(self) -> jq::Result<String>;
+    fn string(self) -> result::Result<String, Self::Err>;
 
     fn index(self, off: usize) -> result::Result<Self, Self::Err>;
 
-    fn get<'a>(self, key: &'a str) -> jq::Result<Self>;
+    fn get<'a>(self, key: &'a str) -> result::Result<Self, Self::Err>;
 }
 
 pub trait And<Rhs=Self> {
