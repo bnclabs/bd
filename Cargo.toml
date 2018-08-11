@@ -6,7 +6,7 @@ description = "big data tool kit"
 readme = "README.md"
 keywords = ["bigdata", "json", "jq", "storage"]
 categories = ["algorithms", "database", "encoding"]
-license = "MIT license"
+license = "MIT"
 license-file = "LICENSE-MIT"
 
 [badges]
