@@ -1194,7 +1194,6 @@ mod tests {
     #[test]
     fn test_simple_jsons() {
         use self::Json::{Null, Bool, String, Integer, Float, Array, Object};
-        use std::string;
 
         let jsons = include!("../testdata/test_simple.jsons");
         let mut refs = include!("../testdata/test_simple.jsons.ref");
@@ -1273,85 +1272,85 @@ mod tests {
 
     #[bench]
     fn bench_null(b: &mut Bencher) {
-        b.iter(|| {JsonBuf::parse_str("null").unwrap()});
+        b.iter(|| {"null".parse::<Json>().unwrap()});
     }
 
     #[bench]
     fn bench_bool(b: &mut Bencher) {
-        b.iter(|| {JsonBuf::parse_str("false").unwrap()});
+        b.iter(|| {"false".parse::<Json>().unwrap()});
     }
 
     #[bench]
     fn bench_num(b: &mut Bencher) {
-        b.iter(|| {JsonBuf::parse_str("10.2").unwrap()});
+        b.iter(|| {"10.2".parse::<Json>().unwrap()});
     }
 
     #[bench]
     fn bench_string(b: &mut Bencher) {
         let s = r#""汉语 / 漢語; Hàn\b \tyǔ ""#;
-        b.iter(|| {JsonBuf::parse_str(s).unwrap()});
+        b.iter(|| {s.parse::<Json>().unwrap()});
     }
 
     #[bench]
     fn bench_array(b: &mut Bencher) {
 	    let s = r#" [null,true,false,10,"tru\"e"]"#;
-        b.iter(|| {JsonBuf::parse_str(s).unwrap()});
+        b.iter(|| {s.parse::<Json>().unwrap()});
     }
 
     #[bench]
     fn bench_map(b: &mut Bencher) {
 	    let s = r#"{"a": null,"b":true,"c":false,"d\"":-10E-1,"e":"tru\"e"}"#;
-        b.iter(|| {JsonBuf::parse_str(s).unwrap()});
+        b.iter(|| {s.parse::<Json>().unwrap()});
     }
 
     #[bench]
     fn bench_map_nom(b: &mut Bencher) {
         let s = r#"  { "a": 42, "b": ["x","y",12 ] , "c": {"hello":"world"}} "#;
-        b.iter(|| {JsonBuf::parse_str(s).unwrap()});
+        b.iter(|| {s.parse::<Json>().unwrap()});
     }
 
     #[bench]
     fn bench_null_to_json(b: &mut Bencher) {
-        let val = JsonBuf::parse_str("null").unwrap();
+        let val = "null".parse::<Json>().unwrap();
         let mut outs = String::with_capacity(64);
-        b.iter(|| {outs.clear(); val.to_json(&mut outs)});
+        b.iter(|| {outs.clear(); write!(outs, "{}", val)});
     }
 
     #[bench]
     fn bench_bool_to_json(b: &mut Bencher) {
-        let val = JsonBuf::parse_str("false").unwrap();
+        let val = "false".parse::<Json>().unwrap();
         let mut outs = String::with_capacity(64);
-        b.iter(|| {outs.clear(); val.to_json(&mut outs)});
+        b.iter(|| {outs.clear(); write!(outs, "{}", val)});
     }
 
     #[bench]
     fn bench_num_to_json(b: &mut Bencher) {
-        let val = JsonBuf::parse_str("10.2").unwrap();
+        let val = "10.2".parse::<Json>().unwrap();
         let mut outs = String::with_capacity(64);
-        b.iter(|| {outs.clear(); val.to_json(&mut outs)});
+        b.iter(|| {outs.clear(); write!(outs, "{}", val)});
     }
 
     #[bench]
     fn bench_string_to_json(b: &mut Bencher) {
         let inp = r#""汉语 / 漢語; Hàn\b \tyǔ ""#;
-        let val = JsonBuf::parse_str(inp).unwrap();
+        let val = inp.parse::<Json>().unwrap();
         let mut outs = String::with_capacity(64);
-        b.iter(|| {outs.clear(); val.to_json(&mut outs)});
+        b.iter(|| {outs.clear(); write!(outs, "{}", val)});
     }
 
     #[bench]
     fn bench_array_to_json(b: &mut Bencher) {
 	    let inp = r#" [null,true,false,10,"tru\"e"]"#;
-        let val = JsonBuf::parse_str(inp).unwrap();
+        let val = inp.parse::<Json>().unwrap();
         let mut outs = String::with_capacity(64);
-        b.iter(|| {outs.clear(); val.to_json(&mut outs)});
+        b.iter(|| {outs.clear(); write!(outs, "{}", val)});
     }
 
     #[bench]
     fn bench_map_to_json(b: &mut Bencher) {
 	    let inp = r#"{"a": null,"b":true,"c":false,"d\"":-10E-1,"e":"tru\"e"}"#;
-        let val = JsonBuf::parse_str(inp).unwrap();
+        let val = inp.parse::<Json>().unwrap();
         let mut outs = String::with_capacity(64);
-        b.iter(|| {outs.clear(); val.to_json(&mut outs)});
+        b.iter(|| {outs.clear(); write!(outs, "{}", val)});
     }
 }
