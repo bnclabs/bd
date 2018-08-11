@@ -4,7 +4,7 @@ use std::fmt::{self};
 use nom::{self, {types::CompleteStr as NS}};
 
 use json::{self, Json};
-use jqnom::parse_program_nom;
+use query_nom::parse_program_nom;
 use document::Document;
 
 

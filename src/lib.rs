@@ -14,7 +14,7 @@ extern crate regex;
 
 pub mod json;
 pub mod query;
-mod jqnom;
+mod query_nom;
 mod document;
 mod lex;
 
