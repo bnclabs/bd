@@ -5,7 +5,7 @@ use std::convert::{From};
 use std::result;
 
 use json::Json;
-use jq;
+use query;
 
 // TODO: why should document be marked as Sized ?
 pub trait Document :
@@ -19,7 +19,7 @@ pub trait Document :
     And<Output=Self> + Or<Output=Self> +
     Recurse + Slice + Comprehension {
 
-    type Err: Into<jq::Error>;
+    type Err: Into<query::Error>;
 
     fn string(self) -> result::Result<String, Self::Err>;
 

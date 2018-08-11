@@ -23,7 +23,7 @@ pub enum Error {
 
 impl fmt::Display for Error {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        use jq::Error::*;
+        use query::Error::*;
 
         match self {
             Parse(s) => write!(f, "{}", s),
@@ -121,7 +121,7 @@ pub enum Thunk where {
 
 impl<D> FnMut<(D,)> for Thunk where D: Document {
     extern "rust-call" fn call_mut(&mut self, args: (D,)) -> Self::Output {
-        use jq::Thunk::*;
+        use query::Thunk::*;
 
         let doc = args.0;
         match self {
@@ -153,7 +153,7 @@ impl<D> FnMut<(D,)> for Thunk where D: Document {
             },
 
             Slice(ref mut thunk, start, end, opt) => { // vector of one or more
-                use jq::Error::Op;
+                use query::Error::Op;
 
                 let mut outs = Vec::new();
                 for item in thunk(doc)?.into_iter() {

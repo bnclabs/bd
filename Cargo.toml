@@ -1,13 +1,12 @@
 [package]
 name = "bd"
-version = "0.1.1"
+version = "0.1.2"
 authors = ["prataprc <prataprc@gmail.com>"]
 description = "big data tool kit"
 readme = "README.md"
 keywords = ["bigdata", "json", "jq", "storage"]
 categories = ["algorithms", "database", "encoding"]
 license = "MIT"
-license-file = "LICENSE-MIT"
 repository = "https://github.com/bnclabs/bd"
 documentation = "https://docs.rs/bd"
 homepage = "https://github.com/bnclabs/bd"

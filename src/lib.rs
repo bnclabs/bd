@@ -13,7 +13,7 @@ extern crate regex;
 #[macro_use] extern crate nom;
 
 pub mod json;
-pub mod jq;
+pub mod query;
 mod jqnom;
 mod document;
 mod lex;

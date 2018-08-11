@@ -2,7 +2,7 @@ use nom::{self, {types::CompleteStr as NS}, IResult};
 
 use lex::Lex;
 use json::{self, Json};
-use jq::Thunk;
+use query::Thunk;
 
 named!(nom_dot(NS) -> NS, tag!("."));
 named!(nom_dotdot(NS) -> NS, tag!(".."));
