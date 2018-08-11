@@ -1,7 +1,17 @@
 [package]
-name = "db-rs"
+name = "db"
 version = "0.1.0"
 authors = ["prataprc <prataprc@gmail.com>"]
+description = "big data tool kit"
+readme = "README.md"
+keywords = ["bigdata", "json", "jq", "storage"]
+categories = ["algorithms", "database", "encoding"]
+license = "MIT license"
+license-file = "LICENSE-MIT"
+
+[badges]
+
+maintenance = { status = "actively-developed" }
 
 [dependencies]
 regex = "1"
