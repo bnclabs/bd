@@ -6,8 +6,8 @@ use std::ops::{Neg, Not, Mul, Div, Rem, Add, Sub, Shr, Shl};
 use std::ops::{BitAnd, BitXor, BitOr, Index, IndexMut};
 use std::ops::{Range, RangeFrom, RangeTo, RangeToInclusive, RangeInclusive};
 use std::ops::{RangeFull};
-use document::{And, Or, Document, Recurse, Slice, Comprehension};
 
+use document::{And, Or, Document, Recurse, Slice, Comprehension};
 use lex::Lex;
 
 include!("./json.rs.lookup");
@@ -165,7 +165,7 @@ impl<R> Iterator for JsonIterate<R> where R: io::Read {
 }
 
 
-pub fn parse_value(text: &str, lex: &mut Lex) -> Result<Json> {
+fn parse_value(text: &str, lex: &mut Lex) -> Result<Json> {
     parse_whitespace(text, lex);
     check_eof(text, lex)?;
 
@@ -253,7 +253,7 @@ fn parse_num(text: &str, lex: &mut Lex) -> Result<Json> {
     doparse(text, text.len(), is_float)
 }
 
-pub fn parse_string(text: &str, lex: &mut Lex) -> Result<Json> {
+pub(super) fn parse_string(text: &str, lex: &mut Lex) -> Result<Json> {
     use self::Json::{String as S};
 
     let mut escape = false;
@@ -370,7 +370,7 @@ fn decode_json_hex_code2(chars: &mut CharIndices, lex: &mut Lex)
 }
 
 
-pub fn parse_array(text: &str, lex: &mut Lex) -> Result<Json> {
+pub(super) fn parse_array(text: &str, lex: &mut Lex) -> Result<Json> {
     lex.incr_col(1); // skip '['
 
     let mut array = Vec::new();
@@ -394,7 +394,7 @@ pub fn parse_array(text: &str, lex: &mut Lex) -> Result<Json> {
     }
 }
 
-pub fn parse_object(text: &str, lex: &mut Lex) -> Result<Json> {
+pub(super) fn parse_object(text: &str, lex: &mut Lex) -> Result<Json> {
     lex.incr_col(1); // skip '{'
 
     let mut m = Vec::new();
@@ -432,7 +432,7 @@ pub fn parse_object(text: &str, lex: &mut Lex) -> Result<Json> {
     }
 }
 
-pub fn parse_whitespace(text: &str, lex: &mut Lex) {
+fn parse_whitespace(text: &str, lex: &mut Lex) {
     for &ch in (&text[lex.off..]).as_bytes() {
         match WS_LOOKUP[ch as usize] {
             0 => break,
@@ -1095,7 +1095,7 @@ impl Comprehension for Json {
     }
 }
 
-pub fn search_by_key(obj: &Vec<KeyValue>, key: &str) -> Result<usize> {
+fn search_by_key(obj: &Vec<KeyValue>, key: &str) -> Result<usize> {
     use std::cmp::Ordering::{Greater, Equal, Less};
 
     let mut size = obj.len();
@@ -1154,36 +1154,6 @@ fn mixin_object(mut this: Vec<KeyValue>, other: Vec<KeyValue>)
         }
     }
     this
-}
-
-pub trait Value {
-    fn value(self) -> Json;
-    fn value_as_ref(&self) -> &Json;
-    fn value_as_mut(&mut self) -> &mut Json;
-}
-
-impl Value for Json {
-    fn value(self) -> Json {
-        self
-    }
-    fn value_as_ref(&self) -> &Json {
-        self
-    }
-    fn value_as_mut(&mut self) -> &mut Json {
-        self
-    }
-}
-
-impl Value for KeyValue {
-    fn value(self) -> Json {
-        self.1
-    }
-    fn value_as_ref(&self) -> &Json {
-        &self.1
-    }
-    fn value_as_mut(&mut self) -> &mut Json {
-        &mut self.1
-    }
 }
 
 #[cfg(test)]

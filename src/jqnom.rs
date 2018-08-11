@@ -1,7 +1,7 @@
 use nom::{self, {types::CompleteStr as NS}, IResult};
 
 use lex::Lex;
-use json::{Json, parse_string, parse_array, parse_object};
+use json::{self, Json};
 use jq::Thunk;
 
 named!(nom_dot(NS) -> NS, tag!("."));
@@ -36,7 +36,7 @@ named!(nom_float(NS) -> f64,
 fn nom_json_string(text: NS) -> nom::IResult<NS, Json> {
     check_next_byte(text, b'"')?;
     let mut lex = Lex::new(0, 1, 1);
-    match parse_string(&text, &mut lex) {
+    match json::parse_string(&text, &mut lex) {
         Ok(s) => Ok((NS(&text[lex.off..]), s)),
         _ => {
             let kind = nom::ErrorKind::Custom(lex.off as u32);
@@ -47,7 +47,7 @@ fn nom_json_string(text: NS) -> nom::IResult<NS, Json> {
 fn nom_json_array(text: NS) -> nom::IResult<NS, Json> {
     check_next_byte(text, b'[')?;
     let mut lex = Lex::new(0, 1, 1);
-    match parse_array(&text, &mut lex) {
+    match json::parse_array(&text, &mut lex) {
         Ok(a) => Ok((NS(&text[lex.off..]), a)),
         _ => {
             let kind = nom::ErrorKind::Custom(lex.off as u32);
@@ -58,7 +58,7 @@ fn nom_json_array(text: NS) -> nom::IResult<NS, Json> {
 fn nom_json_object(text: NS) -> nom::IResult<NS, Json> {
     check_next_byte(text, b'{')?;
     let mut lex = Lex::new(0, 1, 1);
-    match parse_object(&text, &mut lex) {
+    match json::parse_object(&text, &mut lex) {
         Ok(o) => Ok((NS(&text[lex.off..]), o)),
         _ => {
             let kind = nom::ErrorKind::Custom(lex.off as u32);
