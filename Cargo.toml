@@ -1,5 +1,5 @@
 [package]
-name = "db"
+name = "bd"
 version = "0.1.0"
 authors = ["prataprc <prataprc@gmail.com>"]
 description = "big data tool kit"

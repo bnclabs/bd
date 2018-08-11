@@ -3,7 +3,7 @@ Bigdata with Rust
 
 [![IRC #bnc](https://www.irccloud.com/invite-svg?channel=%23bnc&amp;hostname=irc.mozilla.org&amp;port=6667)](https://www.irccloud.com/invite?channel=%23bnc&amp;hostname=irc.mozilla.org&amp;port=6667)
 
-`db-rs` is a big-data package with following primary scope.
+`bd` is a big-data data-base package with following primary scope.
 
 * [x] Interpret data in JSON format based on [RFC8259][jsonrfc].
 * [ ] Expression language to query JSON documents, similar to [jq][jq].
