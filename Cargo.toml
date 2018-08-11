@@ -10,7 +10,7 @@ license = "MIT"
 license-file = "LICENSE-MIT"
 repository = "https://github.com/bnclabs/bd"
 documentation = "https://docs.rs/bd"
-homepage = "https://github.com/bnclabs/db"
+homepage = "https://github.com/bnclabs/bd"
 
 [badges]
 
