@@ -1,6 +1,6 @@
 [package]
 name = "bd"
-version = "0.1.0"
+version = "0.1.1"
 authors = ["prataprc <prataprc@gmail.com>"]
 description = "big data tool kit"
 readme = "README.md"
