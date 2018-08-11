@@ -8,6 +8,9 @@ keywords = ["bigdata", "json", "jq", "storage"]
 categories = ["algorithms", "database", "encoding"]
 license = "MIT"
 license-file = "LICENSE-MIT"
+repository = "https://github.com/bnclabs/bd"
+documentation = "https://docs.rs/bd"
+homepage = "https://github.com/bnclabs/db"
 
 [badges]
 
