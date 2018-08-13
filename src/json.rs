@@ -498,7 +498,7 @@ impl From<String> for KeyValue {
     }
 }
 
-#[derive(Clone,Debug,PartialEq,PartialOrd)]
+#[derive(Clone,PartialEq,PartialOrd)]
 pub enum Json {
     Null,
     Bool(bool),
@@ -704,6 +704,12 @@ impl fmt::Display for Json {
                 }
             }
         }
+    }
+}
+
+impl fmt::Debug for Json {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        <Self as fmt::Display>::fmt(self, f)
     }
 }
 
