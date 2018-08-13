@@ -373,9 +373,8 @@ named!(nom_primary_index_short(NS) -> (Json, Option<NS>),
         (key, opt)
     )
 );
-named!(nom_primary_slice1(NS) -> (Thunk, usize, usize, Option<NS>),
+named!(nom_primary_slice1(NS) -> (usize, usize, Option<NS>),
     do_parse!(
-         thunk: nom_primary_expr >>
                 nom_open_sqr >>
          start: nom_usize >>
                 nom_dotdot    >>
@@ -383,63 +382,58 @@ named!(nom_primary_slice1(NS) -> (Thunk, usize, usize, Option<NS>),
            end: nom_usize >>
                 nom_clos_sqr >>
            opt: nom_opt      >>
-        (thunk, start, (end+1), opt)
+        (start, (end+1), opt)
     )
 );
-named!(nom_primary_slice2(NS) -> (Thunk, usize, usize, Option<NS>),
+named!(nom_primary_slice2(NS) -> (usize, usize, Option<NS>),
     do_parse!(
-         thunk: nom_primary_expr >>
                 nom_open_sqr >>
          start: nom_usize >>
                 nom_dotdot    >>
            end: nom_usize >>
                 nom_clos_sqr >>
            opt: nom_opt      >>
-        (thunk, start, end, opt)
+        (start, end, opt)
     )
 );
-named!(nom_primary_slice3(NS) -> (Thunk, usize, usize, Option<NS>),
+named!(nom_primary_slice3(NS) -> (usize, usize, Option<NS>),
     do_parse!(
-         thunk: nom_primary_expr >>
                 nom_open_sqr >>
          start: nom_usize >>
                 nom_dotdot    >>
                 nom_clos_sqr >>
            opt: nom_opt      >>
-        (thunk, start, usize::max_value(), opt)
+        (start, usize::max_value(), opt)
     )
 );
-named!(nom_primary_slice4(NS) -> (Thunk, usize, usize, Option<NS>),
+named!(nom_primary_slice4(NS) -> (usize, usize, Option<NS>),
     do_parse!(
-         thunk: nom_primary_expr >>
                 nom_open_sqr >>
                 nom_dotdot    >>
            end: nom_usize >>
                 nom_clos_sqr >>
            opt: nom_opt      >>
-        (thunk, usize::min_value(), end, opt)
+        (usize::min_value(), end, opt)
     )
 );
-named!(nom_primary_slice5(NS) -> (Thunk, usize, usize, Option<NS>),
+named!(nom_primary_slice5(NS) -> (usize, usize, Option<NS>),
     do_parse!(
-         thunk: nom_primary_expr >>
                 nom_open_sqr >>
                 nom_dotdot    >>
                 nom_equal >>
            end: nom_usize >>
                 nom_clos_sqr >>
            opt: nom_opt      >>
-        (thunk, usize::min_value(), (end+1), opt)
+        (usize::min_value(), (end+1), opt)
     )
 );
-named!(nom_primary_slice6(NS) -> (Thunk, usize, usize, Option<NS>),
+named!(nom_primary_slice6(NS) -> (usize, usize, Option<NS>),
     do_parse!(
-         thunk: nom_primary_expr >>
                 nom_open_sqr >>
                 nom_dotdot    >>
                 nom_clos_sqr >>
            opt: nom_opt      >>
-        (thunk, usize::min_value(), usize::max_value(), opt)
+        (usize::min_value(), usize::max_value(), opt)
     )
 );
 named!(nom_iterate_item(NS) -> Thunk,
@@ -490,14 +484,13 @@ named!(nom_iterate_items(NS) -> Vec<Thunk>,
         }
     )
 );
-named!(nom_primary_iterate(NS) -> (Thunk, Vec<Thunk>, Option<NS>),
+named!(nom_primary_iterate(NS) -> (Vec<Thunk>, Option<NS>),
     do_parse!(
-         thunk: nom_primary_expr >>
                 nom_open_sqr  >>
         thunks: nom_iterate_items >>
                 nom_clos_sqr  >>
            opt: nom_opt       >>
-        (thunk, thunks, opt)
+        (thunks, opt)
     )
 );
 named!(nom_primary_collection1(NS) -> (Vec<Thunk>, Option<NS>),
@@ -644,13 +637,11 @@ fn nom_empty_program(text: NS) -> nom::IResult<NS, Thunk> {
     if text.len() == 0 {
         return Ok((NS(&text[..]), Thunk::Empty))
     }
-    unreachable!()
+    let ctxt = nom::Context::Code(text, nom::ErrorKind::Custom(0));
+    return Err(nom::Err::Error(ctxt))
 }
 named!(nom_program(NS) -> Thunk,
-    ws!(alt!(
-        nom_expr |
-        nom_empty_program // should alway be last.
-    ))
+    ws!(alt!( nom_empty_program | nom_expr ))
 );
 
 
@@ -667,15 +658,15 @@ fn index_short_to_thunk((key, opt): (Json, Option<NS>)) -> Thunk {
     Thunk::IndexShortcut(key, off, opt.map_or(false, |_| true))
 }
 
-fn slice_to_thunk((thunk, start, end, opt): (Thunk, usize, usize, Option<NS>))
+fn slice_to_thunk((start, end, opt): (usize, usize, Option<NS>))
     -> Thunk
 {
-    Thunk::Slice(Box::new(thunk), start, end, opt.map_or(false, |_| true))
+    Thunk::Slice(start, end, opt.map_or(false, |_| true))
 }
 
-fn iterate_to_thunk((thunk, thunks, opt): (Thunk, Vec<Thunk>, Option<NS>)) -> Thunk {
+fn iterate_to_thunk((thunks, opt): (Vec<Thunk>, Option<NS>)) -> Thunk {
     let opt = opt.map_or(false, |_| true);
-    Thunk::Iterate(Box::new(thunk), thunks, opt)
+    Thunk::Iterate(thunks, opt)
 }
 
 fn collection1_to_thunk((thunks, opt): (Vec<Thunk>, Option<NS>)) -> Thunk {
