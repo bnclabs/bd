@@ -1,3 +1,4 @@
+#[derive(Debug)]
 pub struct Lex{ pub off: usize, pub row: usize, pub col: usize }
 
 impl Lex {

@@ -69,7 +69,7 @@ impl<'a> From<nom::Err<NS<'a>>> for Error {
             },
             nom::Err::Failure(NomContext::Code(rem, _)) => {
                 let rem_till = cmp::min(5, rem.len());
-                Error::Parse(format!("failure at {:}", &rem[..rem_till]))
+                Error::Parse(format!("failure at {}", &rem[..rem_till]))
             },
         }
     }
@@ -83,8 +83,8 @@ pub enum Thunk where {
     Identity,
     Recurse,
     Literal(Json),
-    IndexShortcut(String, Option<usize>, bool),
-    Slice(usize, usize, bool),
+    IndexShortcut(Option<String>, Option<isize>, bool),
+    Slice(isize, isize, bool),
     Iterate(Vec<Thunk>, bool),
     List(Vec<Thunk>, bool),
     Dict(Vec<(Thunk, Thunk)>, bool),
@@ -118,7 +118,7 @@ impl FromStr for Thunk {
     type Err=Error;
 
     fn from_str(text: &str) -> Result<Thunk> {
-        let (_, thunk) = parse_program_nom(NS(text))?;
+        let (_x, thunk) = parse_program_nom(NS(text))?;
         Ok(thunk)
     }
 }
@@ -146,14 +146,13 @@ impl<D> FnMut<(D,)> for Thunk where D: Document {
             },
 
             IndexShortcut(key, off, opt) => { // vector of single item
-                let res = do_obj_shortcut(key, doc.clone());
-                if res.is_err() {
-                    let res = do_index_shortcut(*off, doc);
-                    if *opt && res.is_err() { return Ok(vec![]) }
-                    Ok(vec![res.unwrap()])
+                let res: Result<D>;
+                if key.is_some() {
+                    res = do_get_shortcut(key.as_ref().unwrap(), doc);
                 } else {
-                    Ok(vec![res.unwrap()])
+                    res = do_index_shortcut(off.unwrap(), doc);
                 }
+                if *opt && res.is_err() { Ok(vec![]) } else { Ok(vec![res?]) }
             },
 
             Slice(start, end, opt) => { // vector of one or more
@@ -162,6 +161,11 @@ impl<D> FnMut<(D,)> for Thunk where D: Document {
                 let res = doc
                     .slice(*start, *end)
                     .ok_or_else( || Op(None, "json not an array".to_string()));
+                if *opt && res.is_err() { Ok(vec![]) } else { Ok(vec![res?]) }
+            },
+
+            Iterate(ref mut thunks, opt) if thunks.len() == 0 => {
+                let res = do_full_iterate(thunks, *opt, doc);
                 if *opt && res.is_err() { Ok(vec![]) } else { Ok(res?) }
             },
 
@@ -214,19 +218,24 @@ impl<D> FnOnce<(D,)> for Thunk where D: Document {
     }
 }
 
-fn do_obj_shortcut<D>(key: &String, doc: D)
+fn do_get_shortcut<D>(key: &String, doc: D)
     -> Result<D> where D: Document
 {
     doc.get(key).map_err(Into::into)
 }
 
-fn do_index_shortcut<D>(off: Option<usize>, doc: D)
+fn do_index_shortcut<D>(off: isize, doc: D)
     -> Result<D> where D: Document
 {
-    match off {
-        Some(off) => doc.index(off).map_err(Into::into),
-        None => Err(Error::Op(None, "json not an array".to_string())),
-    }
+    doc.index(off).map_err(Into::into)
+}
+
+fn do_full_iterate<D>(_thunks: &mut Vec<Thunk>, _opt: bool, _doc: D)
+    -> Result<Output<D>> where D: Document
+{
+    let out = Vec::new();
+    //doc.into_iter().for_each(|item| out.push(item));
+    Ok(out)
 }
 
 fn do_iterate<D>(thunks: &mut Vec<Thunk>, opt: bool, doc: D)
@@ -498,6 +507,7 @@ fn do_pipe<D>(lthunk: &mut Thunk, rthunk: &mut Thunk, doc: D)
 }
 
 
+// TODO: add the optional variant ``?`` for each test case.
 #[cfg(test)]
 mod test {
     use super::*;
@@ -557,7 +567,175 @@ mod test {
     #[test]
     fn test_query_identity() {
         let mut thunk: Thunk = ".".parse().unwrap();
+
         let doc: Json = "null".parse().unwrap();
         assert_eq!("[null]", &format!("{:?}", thunk(doc.clone()).unwrap()));
+
+        let doc: Json = "true".parse().unwrap();
+        assert_eq!("[true]", &format!("{:?}", thunk(doc.clone()).unwrap()));
+
+        let doc: Json = "false".parse().unwrap();
+        assert_eq!("[false]", &format!("{:?}", thunk(doc.clone()).unwrap()));
+
+        let doc: Json = "10".parse().unwrap();
+        assert_eq!("[10]", &format!("{:?}", thunk(doc.clone()).unwrap()));
+
+        let doc: Json = "10.2".parse().unwrap();
+        assert_eq!("[1.02e1]", &format!("{:?}", thunk(doc.clone()).unwrap()));
+
+        let doc: Json = "\"hello\"".parse().unwrap();
+        assert_eq!("[\"hello\"]", &format!("{:?}", thunk(doc.clone()).unwrap()));
+
+        let doc: Json = "[true,10]".parse().unwrap();
+        assert_eq!("[[true,10]]", &format!("{:?}", thunk(doc.clone()).unwrap()));
+
+        let doc: Json = "{\"a\": 10}".parse().unwrap();
+        assert_eq!("[{\"a\":10}]", &format!("{:?}", thunk(doc.clone()).unwrap()));
     }
+
+    #[test]
+    fn test_query_get() {
+        let mut thunk: Thunk = ".foo".parse().unwrap();
+
+        let doc: Json = r#"{"foo": 10}"#.parse().unwrap();
+        assert_eq!("[10]", &format!("{:?}", thunk(doc.clone()).unwrap()));
+
+        let doc: Json = r#"{"notfoo": 10}"#.parse().unwrap();
+        let err = json::Error::KeyMissing(0, "foo".to_string());
+        assert_eq!(
+            Err(Error::Op(Some(err), "json op error".to_string())),
+            thunk(doc.clone())
+        );
+
+        thunk = r#".foo?"#.parse().unwrap();
+        let doc: Json = r#"{"nonfoo": 10}"#.parse().unwrap();
+        assert_eq!("[]", &format!("{:?}", thunk(doc.clone()).unwrap()));
+
+        thunk = r#"."foo""#.parse().unwrap();
+        let doc: Json = r#"{"foo": 10}"#.parse().unwrap();
+        assert_eq!("[10]", &format!("{:?}", thunk(doc.clone()).unwrap()));
+
+        thunk = r#".["foo"]"#.parse().unwrap();
+        let doc: Json = r#"{"foo": 10}"#.parse().unwrap();
+        assert_eq!("[10]", &format!("{:?}", thunk(doc.clone()).unwrap()));
+
+        thunk = r#".["foo"]?"#.parse().unwrap();
+        let doc: Json = r#"{"nonfoo": 10}"#.parse().unwrap();
+        assert_eq!("[]", &format!("{:?}", thunk(doc.clone()).unwrap()));
+
+        thunk = r#".[foo]"#.parse().unwrap();
+        let doc: Json = r#"{"foo": 10}"#.parse().unwrap();
+        assert_eq!("[10]", &format!("{:?}", thunk(doc.clone()).unwrap()));
+
+        thunk = r#".[foo]?"#.parse().unwrap();
+        let doc: Json = r#"{"nonfoo": 10}"#.parse().unwrap();
+        assert_eq!("[]", &format!("{:?}", thunk(doc.clone()).unwrap()));
+
+        thunk = r#"."foo.bar""#.parse().unwrap();
+        let doc: Json = r#"{"foo.bar": 10}"#.parse().unwrap();
+        assert_eq!("[10]", &format!("{:?}", thunk(doc.clone()).unwrap()));
+
+        thunk = r#".["foo.bar"]"#.parse().unwrap();
+        let doc: Json = r#"{"foo.bar": 10}"#.parse().unwrap();
+        assert_eq!("[10]", &format!("{:?}", thunk(doc.clone()).unwrap()));
+
+        thunk = r#".["foo.bar"?]"#.parse().unwrap();
+        let doc: Json = r#"{"nonfoo.bar": 10}"#.parse().unwrap();
+        assert_eq!("[]", &format!("{:?}", thunk(doc.clone()).unwrap()));
+    }
+
+    #[test]
+    fn test_query_index() {
+        let mut thunk: Thunk = ".0".parse().unwrap();
+
+        let doc: Json = r#"[10, true, "hello"]"#.parse().unwrap();
+        assert_eq!("[10]", &format!("{:?}", thunk(doc.clone()).unwrap()));
+
+        thunk = ".2".parse().unwrap();
+        let doc: Json = r#"[10, true, "hello"]"#.parse().unwrap();
+        assert_eq!("[\"hello\"]", &format!("{:?}", thunk(doc.clone()).unwrap()));
+
+        thunk = ".-2".parse().unwrap();
+        let doc: Json = r#"[10, true, "hello"]"#.parse().unwrap();
+        assert_eq!("[true]", &format!("{:?}", thunk(doc.clone()).unwrap()));
+
+        thunk = ".[0]".parse().unwrap();
+        let doc: Json = r#"[10, true, "hello"]"#.parse().unwrap();
+        assert_eq!("[10]", &format!("{:?}", thunk(doc.clone()).unwrap()));
+
+        thunk = ".[2]".parse().unwrap();
+        let doc: Json = r#"[10, true, "hello"]"#.parse().unwrap();
+        assert_eq!("[\"hello\"]", &format!("{:?}", thunk(doc.clone()).unwrap()));
+
+        thunk = "-.[2]".parse().unwrap();
+        let doc: Json = r#"[10, true, 20]"#.parse().unwrap();
+        assert_eq!("[-20]", &format!("{:?}", thunk(doc.clone()).unwrap()));
+    }
+
+    #[test]
+    fn test_query_slice_array() {
+        let mut thunk: Thunk = ".[2..4]".parse().unwrap();
+        let doc: Json = r#"["a", "b", "c", "d", "e"]"#.parse().unwrap();
+
+        let refval = r#"[["c","d"]]"#;
+        assert_eq!(refval, &format!("{:?}", thunk(doc.clone()).unwrap()));
+
+        thunk = ".[2..=3]".parse().unwrap();
+        let refval = r#"[["c","d"]]"#;
+        assert_eq!(refval, &format!("{:?}", thunk(doc.clone()).unwrap()));
+
+        thunk = ".[..3]".parse().unwrap();
+        let refval = r#"[["a","b","c"]]"#;
+        assert_eq!(refval, &format!("{:?}", thunk(doc.clone()).unwrap()));
+
+        thunk = ".[..=3]".parse().unwrap();
+        let refval = r#"[["a","b","c","d"]]"#;
+        assert_eq!(refval, &format!("{:?}", thunk(doc.clone()).unwrap()));
+
+        thunk = ".[2..]".parse().unwrap();
+        let refval = r#"[["c","d","e"]]"#;
+        assert_eq!(refval, &format!("{:?}", thunk(doc.clone()).unwrap()));
+
+        thunk = ".[..]".parse().unwrap();
+        let refval = r#"[["a","b","c","d","e"]]"#;
+        assert_eq!(refval, &format!("{:?}", thunk(doc.clone()).unwrap()));
+    }
+
+    #[test]
+    fn test_query_slice_string() {
+        let mut thunk: Thunk = ".[2..4]".parse().unwrap();
+        let doc: Json = r#""abcdefghi""#.parse().unwrap();
+
+        let refval = r#"["cd"]"#;
+        assert_eq!(refval, &format!("{:?}", thunk(doc.clone()).unwrap()));
+
+        thunk = ".[2..=3]".parse().unwrap();
+        let refval = r#"["cd"]"#;
+        assert_eq!(refval, &format!("{:?}", thunk(doc.clone()).unwrap()));
+
+        thunk = ".[..3]".parse().unwrap();
+        let refval = r#"["abc"]"#;
+        assert_eq!(refval, &format!("{:?}", thunk(doc.clone()).unwrap()));
+
+        thunk = ".[..=3]".parse().unwrap();
+        let refval = r#"["abcd"]"#;
+        assert_eq!(refval, &format!("{:?}", thunk(doc.clone()).unwrap()));
+
+        thunk = ".[2..]".parse().unwrap();
+        let refval = r#"["cdefghi"]"#;
+        assert_eq!(refval, &format!("{:?}", thunk(doc.clone()).unwrap()));
+
+        thunk = ".[..]".parse().unwrap();
+        let refval = r#"["abcdefghi"]"#;
+        assert_eq!(refval, &format!("{:?}", thunk(doc.clone()).unwrap()));
+    }
+
+    //#[test]
+    //fn test_query_iterator() {
+    //    let mut thunk: Thunk = ".[]".parse().unwrap();
+
+    //    let doc: Json = r#"[1,2,3]"#.parse().unwrap();
+    //    let refval = r#"[1,2,3]"#;
+    //    assert_eq!(refval, &format!("{:?}", thunk(doc.clone()).unwrap()));
+    //}
 }

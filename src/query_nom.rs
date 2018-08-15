@@ -4,34 +4,28 @@ use lex::Lex;
 use json::{self, Json};
 use query::Thunk;
 
-named!(nom_dot(NS) -> NS, tag!("."));
-named!(nom_dotdot(NS) -> NS, tag!(".."));
-named!(nom_colon(NS) -> NS, tag!(":"));
-named!(nom_comma(NS) -> NS, tag!(","));
-named!(nom_equal(NS) -> NS, tag!("="));
-named!(nom_open_sqr(NS) -> NS, tag!("["));
-named!(nom_clos_sqr(NS) -> NS, tag!("]"));
-named!(nom_open_brace(NS) -> NS, tag!("{"));
-named!(nom_clos_brace(NS) -> NS, tag!("}"));
-named!(nom_open_paran(NS) -> NS, tag!(")"));
-named!(nom_clos_paran(NS) -> NS, tag!(")"));
-named!(nom_opt(NS) -> Option<NS>, opt!(tag!("?")));
-named!(nom_identifier(NS) -> NS, re_match!(r#"^[a-zA-Z0-9_]+"#));
+named!(nom_dot(NS) -> NS, ws!(tag!(".")));
+named!(nom_dotdot(NS) -> NS, ws!(tag!("..")));
+named!(nom_colon(NS) -> NS, ws!(tag!(":")));
+named!(nom_comma(NS) -> NS, ws!(tag!(",")));
+named!(nom_equal(NS) -> NS, ws!(tag!("=")));
+named!(nom_open_sqr(NS) -> NS, ws!(tag!("[")));
+named!(nom_clos_sqr(NS) -> NS, ws!(tag!("]")));
+named!(nom_open_brace(NS) -> NS, ws!(tag!("{")));
+named!(nom_clos_brace(NS) -> NS, ws!(tag!("}")));
+named!(nom_open_paran(NS) -> NS, ws!(tag!(")")));
+named!(nom_clos_paran(NS) -> NS, ws!(tag!(")")));
+named!(nom_opt(NS) -> Option<NS>, opt!(ws!(tag!("?"))));
+named!(nom_identifier(NS) -> NS, ws!(re_find!(r"^[A-Za-z_][0-9A-Za-z_]+")));
 
-named!(nom_null(NS) -> NS, tag!("null"));
-named!(nom_true(NS) -> NS, tag!("true"));
-named!(nom_false(NS) -> NS, tag!("false"));
-named!(nom_int(NS) -> i128,
-    flat_map!(re_match!(r#"^[+-]?\d+"#), parse_to!(i128))
+named!(nom_null(NS) -> NS, ws!(tag!("null")));
+named!(nom_true(NS) -> NS, ws!(tag!("true")));
+named!(nom_false(NS) -> NS, ws!(tag!("false")));
+named!(nom_isize(NS) -> isize,
+    flat_map!(ws!(re_find!(r#"^[+-]?\d+"#)), parse_to!(isize))
 );
-named!(nom_usize(NS) -> usize,
-    flat_map!(re_match!(r#"^[+-]?\d+"#), parse_to!(usize))
-);
-named!(nom_float(NS) -> f64,
-    flat_map!(
-        re_match!(r#"^[-+]?[0-9]*\.?[0-9]+([eE][-+]?[0-9]+)?"#),
-        parse_to!(f64)
-    )
+named!(nom_number(NS) -> NS,
+    ws!(re_find!(r#"^[-+]?[0-9]+\.?[0-9]+([eE][-+]?[0-9]+)?"#))
 );
 fn nom_json_string(text: NS) -> nom::IResult<NS, Json> {
     check_next_byte(text, b'"')?;
@@ -40,18 +34,19 @@ fn nom_json_string(text: NS) -> nom::IResult<NS, Json> {
         Ok(s) => Ok((NS(&text[lex.off..]), s)),
         _ => {
             let kind = nom::ErrorKind::Custom(lex.off as u32);
-            return Err(nom::Err::Failure(nom::Context::Code(text, kind)));
+            return Err(nom::Err::Error(nom::Context::Code(text, kind)));
         }
     }
 }
 fn nom_json_array(text: NS) -> nom::IResult<NS, Json> {
     check_next_byte(text, b'[')?;
+    //println!("array {}", &text);
     let mut lex = Lex::new(0, 1, 1);
     match json::parse_array(&text, &mut lex) {
         Ok(a) => Ok((NS(&text[lex.off..]), a)),
         _ => {
             let kind = nom::ErrorKind::Custom(lex.off as u32);
-            return Err(nom::Err::Failure(nom::Context::Code(text, kind)));
+            return Err(nom::Err::Error(nom::Context::Code(text, kind)));
         }
     }
 }
@@ -62,7 +57,7 @@ fn nom_json_object(text: NS) -> nom::IResult<NS, Json> {
         Ok(o) => Ok((NS(&text[lex.off..]), o)),
         _ => {
             let kind = nom::ErrorKind::Custom(lex.off as u32);
-            return Err(nom::Err::Failure(nom::Context::Code(text, kind)));
+            return Err(nom::Err::Error(nom::Context::Code(text, kind)));
         }
     }
 }
@@ -104,21 +99,23 @@ fn nom_json_object(text: NS) -> nom::IResult<NS, Json> {
 named!(nom_expr(NS) -> Thunk,
     map!(
         do_parse!(
-             thunk: nom_or >>
+               lhs: nom_or >>
             thunks: many0!(nom_pipe_expr) >>
-            (thunk, thunks)
+            (lhs, thunks)
         ),
         |(mut lhs, thunks)| {
+            //println!("nom_expr-eee, {:?} {:?}", lhs, thunks);
             for rhs in thunks {
                 lhs = Thunk::Pipe(Box::new(lhs), Box::new(rhs));
             }
+            //println!("nom_expr-xxx, {:?}", lhs);
             lhs
         }
     )
 );
 named!(nom_pipe_expr(NS) -> Thunk,
     do_parse!(
-              tag!("|") >>
+              ws!(opt!(tag!("|"))) >>
         expr: nom_or >>
         (expr)
     )
@@ -141,7 +138,7 @@ named!(nom_or(NS) -> Thunk,
 );
 named!(nom_or_expr(NS) -> Thunk,
     do_parse!(
-              tag!("||") >>
+              ws!(tag!("||")) >>
         expr: nom_and >>
         (expr)
     )
@@ -164,7 +161,7 @@ named!(nom_and(NS) -> Thunk,
 );
 named!(nom_and_expr(NS) -> Thunk,
     do_parse!(
-              tag!("&&") >>
+              ws!(tag!("&&")) >>
         expr: nom_compare >>
         (expr)
     )
@@ -195,10 +192,10 @@ named!(nom_compare(NS) -> Thunk,
 );
 named!(nom_compare_expr(NS) -> (NS, Thunk),
     do_parse!(
-          op: alt!(
+          op: ws!(alt!(
                 tag!("==") | tag!("!=") | tag!("<") |
                 tag!("<=") | tag!(">") | tag!(">=")
-              ) >>
+              )) >>
         expr: nom_bitor >>
         (op, expr)
     )
@@ -221,7 +218,7 @@ named!(nom_bitor(NS) -> Thunk,
 );
 named!(nom_bitor_expr(NS) -> Thunk,
     do_parse!(
-              tag!("bor") >>
+              ws!(tag!("bor")) >>
         expr: nom_bitxor >>
         (expr)
     )
@@ -244,7 +241,7 @@ named!(nom_bitxor(NS) -> Thunk,
 );
 named!(nom_bitxor_expr(NS) -> Thunk,
     do_parse!(
-              tag!("^") >>
+              ws!(tag!("^")) >>
         expr: nom_bitand >>
         (expr)
     )
@@ -267,7 +264,7 @@ named!(nom_bitand(NS) -> Thunk,
 );
 named!(nom_bitand_expr(NS) -> Thunk,
     do_parse!(
-              tag!("&") >>
+              ws!(tag!("&")) >>
         expr: nom_shift >>
         (expr)
     )
@@ -294,7 +291,7 @@ named!(nom_shift(NS) -> Thunk,
 );
 named!(nom_shift_expr(NS) -> (NS, Thunk),
     do_parse!(
-          op: alt!(tag!("<<") | tag!(">>")) >>
+          op: ws!(alt!(tag!("<<") | tag!(">>"))) >>
         expr: nom_add_sub >>
         (op, expr)
     )
@@ -321,7 +318,7 @@ named!(nom_add_sub(NS) -> Thunk,
 );
 named!(nom_add_expr(NS) -> (NS, Thunk),
     do_parse!(
-          op: alt!(tag!("+") | tag!("-")) >>
+          op: ws!(alt!(tag!("+") | tag!("-"))) >>
         expr: nom_mult_div_rem >>
         (op, expr)
     )
@@ -335,6 +332,7 @@ named!(nom_mult_div_rem(NS) -> Thunk,
             (thunk, op_thunks)
         ),
         |(mut lhs, op_thunks)| {
+            //println!("............ mult {:?} {:?}", lhs, op_thunks);
             for (op, rhs) in op_thunks {
                 lhs = match *op {
                     "*" => Thunk::Mult(Box::new(lhs), Box::new(rhs)),
@@ -349,7 +347,7 @@ named!(nom_mult_div_rem(NS) -> Thunk,
 );
 named!(nom_mult_expr(NS) -> (NS, Thunk),
     do_parse!(
-          op: alt!(tag!("*") | tag!("/") | tag!("%")) >>
+          op: ws!(alt!(tag!("*") | tag!("/") | tag!("%"))) >>
         expr: nom_primary_expr >>
         (op, expr)
     )
@@ -359,13 +357,18 @@ named!(nom_mult_expr(NS) -> (NS, Thunk),
 //------------------ PRIMAR EXPRESSIONS ------------------------
 
 
-named!(nom_key(NS) -> Json,
+named!(nom_key(NS) -> (Option<String>, Option<isize>),
     alt!(
-        nom_identifier => { |s: NS| Json::String((&s).to_string()) } |
-        nom_json_string
+        nom_identifier => { |s: NS| (Some((&s).to_string()), None) } |
+        nom_isize => { |i: isize| (None, Some(i)) } |
+        nom_json_string => { |s: Json|
+            match s { Json::String(s) => (Some(s), None), _ => unreachable!() }
+        }
     )
 );
-named!(nom_primary_index_short(NS) -> (Json, Option<NS>),
+named!(nom_primary_index_short(NS) ->
+    ((Option<String>, Option<isize>), Option<NS>),
+
     do_parse!(
              nom_dot  >>
         key: nom_key  >>
@@ -373,91 +376,88 @@ named!(nom_primary_index_short(NS) -> (Json, Option<NS>),
         (key, opt)
     )
 );
-named!(nom_primary_slice1(NS) -> (usize, usize, Option<NS>),
+named!(nom_primary_slice1(NS) -> (isize, isize, Option<NS>),
     do_parse!(
                 nom_open_sqr >>
-         start: nom_usize >>
+         start: nom_isize >>
                 nom_dotdot    >>
                 nom_equal    >>
-           end: nom_usize >>
+           end: nom_isize >>
                 nom_clos_sqr >>
            opt: nom_opt      >>
         (start, (end+1), opt)
     )
 );
-named!(nom_primary_slice2(NS) -> (usize, usize, Option<NS>),
+named!(nom_primary_slice2(NS) -> (isize, isize, Option<NS>),
     do_parse!(
                 nom_open_sqr >>
-         start: nom_usize >>
+         start: nom_isize >>
                 nom_dotdot    >>
-           end: nom_usize >>
+           end: nom_isize >>
                 nom_clos_sqr >>
            opt: nom_opt      >>
         (start, end, opt)
     )
 );
-named!(nom_primary_slice3(NS) -> (usize, usize, Option<NS>),
+named!(nom_primary_slice3(NS) -> (isize, isize, Option<NS>),
     do_parse!(
                 nom_open_sqr >>
-         start: nom_usize >>
+         start: nom_isize >>
                 nom_dotdot    >>
                 nom_clos_sqr >>
            opt: nom_opt      >>
-        (start, usize::max_value(), opt)
+        (start, isize::max_value(), opt)
     )
 );
-named!(nom_primary_slice4(NS) -> (usize, usize, Option<NS>),
+named!(nom_primary_slice4(NS) -> (isize, isize, Option<NS>),
     do_parse!(
                 nom_open_sqr >>
                 nom_dotdot    >>
-           end: nom_usize >>
+           end: nom_isize >>
                 nom_clos_sqr >>
            opt: nom_opt      >>
-        (usize::min_value(), end, opt)
+        (0, end, opt)
     )
 );
-named!(nom_primary_slice5(NS) -> (usize, usize, Option<NS>),
+named!(nom_primary_slice5(NS) -> (isize, isize, Option<NS>),
     do_parse!(
                 nom_open_sqr >>
                 nom_dotdot    >>
                 nom_equal >>
-           end: nom_usize >>
+           end: nom_isize >>
                 nom_clos_sqr >>
            opt: nom_opt      >>
-        (usize::min_value(), (end+1), opt)
+        (0, (end+1), opt)
     )
 );
-named!(nom_primary_slice6(NS) -> (usize, usize, Option<NS>),
+named!(nom_primary_slice6(NS) -> (isize, isize, Option<NS>),
     do_parse!(
                 nom_open_sqr >>
                 nom_dotdot    >>
                 nom_clos_sqr >>
            opt: nom_opt      >>
-        (usize::min_value(), usize::max_value(), opt)
+        (0, isize::max_value(), opt)
     )
 );
 named!(nom_iterate_item(NS) -> Thunk,
     map!(
         do_parse!(
-        thunk: alt!(
-                    nom_expr |
-                    nom_identifier => { |s: NS| {
-                        Thunk::IndexShortcut((&s).to_string(), None, false)
-                    }}
-               ) >>
-          opt: nom_opt >>
-        (thunk, opt)
+            thunk: alt!(
+                        nom_key => { |(key, off): (Option<String>, Option<isize>)| {
+                            //println!(".......... iterate_item key {}", s);
+                            Thunk::IndexShortcut(key, off, false)
+                        }} |
+                        nom_expr
+                   ) >>
+              opt: nom_opt >>
+            (thunk, opt)
         ),
-        |(thunk, opt_outer)| {
+        |(thunk, opt)| {
             match thunk {
-                Thunk::IndexShortcut(key, None, opt_inner) => {
-                    let off: Option<usize> = key.parse()
-                        .map(|off| Some(off))
-                        .unwrap_or(None);
-                    let opt = opt_outer.map_or(opt_inner, |_| true);
-                    Thunk::IndexShortcut(key, off, opt)
+                Thunk::IndexShortcut(key, off, _) => {
+                    Thunk::IndexShortcut(key, off, opt.map_or(false, |_| true))
                 },
-                thunk => thunk
+                _ => unreachable!(),
             }
         }
     )
@@ -477,11 +477,20 @@ named!(nom_iterate_items(NS) -> Vec<Thunk>,
             (item, items)
         ),
         |(item, items)| {
+            //println!("........ iterate_items {:?} {:?}", item, items);
             match items {
                 Some(mut items) => { items.insert(0, item); items },
                 None => vec![item],
             }
         }
+    )
+);
+named!(nom_primary_full_iterate(NS) -> Option<NS>,
+    do_parse!(
+                nom_open_sqr  >>
+                nom_clos_sqr  >>
+           opt: nom_opt       >>
+        (opt)
     )
 );
 named!(nom_primary_iterate(NS) -> (Vec<Thunk>, Option<NS>),
@@ -553,14 +562,14 @@ named!(nom_primary_paran_expr(NS) -> Thunk,
 );
 named!(nom_primary_unaryneg_expr(NS) -> Thunk,
     do_parse!(
-               tag!("-") >>
+               ws!(tag!("-")) >>
         thunk: nom_expr >>
         (thunk)
     )
 );
 named!(nom_primary_unarynot_expr(NS) -> Thunk,
     do_parse!(
-               tag!("!") >>
+               ws!(tag!("!")) >>
         thunk: nom_expr >>
         (thunk)
     )
@@ -570,8 +579,7 @@ named!(nom_primary_literal(NS) -> Thunk,
         nom_null  => { |_| Thunk::Literal(Json::Null) } |
         nom_true  => { |_| Thunk::Literal(Json::Bool(true)) } |
         nom_false => { |_| Thunk::Literal(Json::Bool(false)) } |
-        nom_int   => { |i| Thunk::Literal(Json::Integer(i)) } |
-        nom_float => { |f| Thunk::Literal(Json::Float(f)) } |
+        nom_number => { number_literal } |
         nom_json_string => { |s| Thunk::Literal(s) } |
         nom_json_array => { |a| Thunk::Literal(a) } |
         nom_json_object => { |o| Thunk::Literal(o) }
@@ -589,15 +597,16 @@ named!(nom_primary_builtins(NS) -> (NS, Vec<Thunk>),
 
 named!(nom_primary_expr(NS) -> Thunk,
     alt!(
-        nom_primary_literal | // should come before identifier
-        nom_primary_builtins => { builtin_to_thunk } |
         nom_primary_slice1 => { slice_to_thunk } |
         nom_primary_slice2 => { slice_to_thunk } |
         nom_primary_slice3 => { slice_to_thunk } |
         nom_primary_slice4 => { slice_to_thunk } |
         nom_primary_slice5 => { slice_to_thunk } |
         nom_primary_slice6 => { slice_to_thunk } |
+        nom_primary_full_iterate => { full_iterate_to_thunk } |
         nom_primary_iterate => { iterate_to_thunk } |
+        nom_primary_literal | // should come before identifier
+        nom_primary_builtins => { builtin_to_thunk } |
         nom_primary_collection1 => { collection1_to_thunk } |
         nom_primary_collection2 => { collection2_to_thunk } |
         nom_primary_index_short => { index_short_to_thunk } |
@@ -624,6 +633,7 @@ named!(nom_expr_list(NS) -> Vec<Thunk>,
             (thunk, thunks)
         ),
         |(thunk, thunks)| {
+            //println!(".......... expr list {:?}", thunk);
             match thunks {
                 Some(mut thunks) => { thunks.insert(0, thunk); thunks },
                 None => vec![thunk]
@@ -641,7 +651,10 @@ fn nom_empty_program(text: NS) -> nom::IResult<NS, Thunk> {
     return Err(nom::Err::Error(ctxt))
 }
 named!(nom_program(NS) -> Thunk,
-    ws!(alt!( nom_empty_program | nom_expr ))
+    ws!(alt!(
+        nom_empty_program |
+        nom_expr
+    ))
 );
 
 
@@ -649,23 +662,53 @@ fn builtin_to_thunk((funcname, args): (NS, Vec<Thunk>)) -> Thunk {
     Thunk::Builtin(funcname.to_string(), args)
 }
 
-fn index_short_to_thunk((key, opt): (Json, Option<NS>)) -> Thunk {
-    let key = match key {Json::String(s) => s, _ => unreachable!()};
-    let off: Option<usize> = match key.parse() {
-        Ok(off) => Some(off),
-        _ => None
-    };
+fn index_short_to_thunk(
+    ((key, off), opt): ((Option<String>, Option<isize>), Option<NS>))
+    -> Thunk
+{
+    //println!(".......... index_short_to_thunk {:?}, {:?}", key, off);
     Thunk::IndexShortcut(key, off, opt.map_or(false, |_| true))
 }
 
-fn slice_to_thunk((start, end, opt): (usize, usize, Option<NS>))
+fn slice_to_thunk((start, end, opt): (isize, isize, Option<NS>))
     -> Thunk
 {
+    //println!(".......... slice_to_thunk {} {}, {:?}", start, end, opt);
     Thunk::Slice(start, end, opt.map_or(false, |_| true))
+}
+
+fn number_literal(s: NS) -> Thunk {
+    //println!("number_literal ..... {:?}", s);
+    if let Ok(n) = (&s).parse::<i128>() {
+        Thunk::Literal(Json::Integer(n))
+    } else if let Ok(f) = (&s).parse::<f64>() {
+        Thunk::Literal(Json::Float(f))
+    } else {
+        unreachable!()
+    }
+}
+
+fn full_iterate_to_thunk(opt: Option<NS>) -> Thunk {
+    let opt = opt.map_or(false, |_| true);
+    //println!("full iterate ........ {:?}", thunks);
+    let thunks: Vec<Thunk> = vec![];
+    Thunk::Iterate(thunks, opt)
 }
 
 fn iterate_to_thunk((thunks, opt): (Vec<Thunk>, Option<NS>)) -> Thunk {
     let opt = opt.map_or(false, |_| true);
+    //println!("iterate ........ {:?}", thunks);
+    let thunks = thunks.into_iter().map(|thunk|
+        match thunk {
+            Thunk::Literal(Json::Integer(n)) => {
+                Thunk::IndexShortcut(None, Some(n as isize), opt)
+            },
+            Thunk::Literal(Json::String(s)) => {
+                Thunk::IndexShortcut(Some(s), None, opt)
+            },
+            thunk => thunk,
+        }
+    ).collect();
     Thunk::Iterate(thunks, opt)
 }
 

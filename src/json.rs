@@ -6,8 +6,9 @@ use std::ops::{Neg, Not, Mul, Div, Rem, Add, Sub, Shr, Shl};
 use std::ops::{BitAnd, BitXor, BitOr, Index, IndexMut};
 use std::ops::{Range, RangeFrom, RangeTo, RangeToInclusive, RangeInclusive};
 use std::ops::{RangeFull};
+use std::slice;
 
-use document::{And, Or, Document, Recurse, Slice, Comprehension};
+use document::{self, And, Or, Document, Recurse, Slice, Comprehension};
 use lex::Lex;
 
 include!("./json.rs.lookup");
@@ -22,7 +23,7 @@ pub enum Error {
     ParseInt(std::num::ParseIntError, String),
     NotMyType(String),
     KeyMissing(usize, String),
-    IndexUnbound(usize, usize),
+    IndexUnbound(isize, isize),
 }
 
 impl Error {
@@ -90,8 +91,8 @@ impl JsonBuf {
         JsonBuf::init(Some(String::with_capacity(cap)), None)
     }
 
-    pub fn iter<R>(r: R) -> JsonIterate<R> where R: io::Read {
-        JsonIterate::new(r)
+    pub fn iter<R>(r: R) -> Jsons<R> where R: io::Read {
+        Jsons::new(r)
     }
 
     pub fn set<T>(&mut self, text: &T) where T: AsRef<str> + ?Sized {
@@ -125,26 +126,26 @@ impl<'a, T> From<&'a T> for JsonBuf where T: AsRef<str> + ?Sized {
 }
 
 
-pub struct JsonIterate<R> where R: io::Read {
+pub struct Jsons<R> where R: io::Read {
     inner: String,
     lex: Lex,
     reader: R,
     buffer: Vec<u8>,
 }
 
-impl<R> JsonIterate<R> where R: io::Read {
+impl<R> Jsons<R> where R: io::Read {
     const BLOCK_SIZE: usize = 1024;
 
-    fn new(reader: R) -> JsonIterate<R> {
+    fn new(reader: R) -> Jsons<R> {
         let inner = String::with_capacity(Self::BLOCK_SIZE);
         let mut buffer = Vec::with_capacity(Self::BLOCK_SIZE);
         let lex = Lex::new(0, 1, 1);
         unsafe{ buffer.set_len(Self::BLOCK_SIZE) };
-        JsonIterate{ inner, lex, reader, buffer }
+        Jsons{ inner, lex, reader, buffer }
     }
 }
 
-impl<R> Iterator for JsonIterate<R> where R: io::Read {
+impl<R> Iterator for Jsons<R> where R: io::Read {
     type Item=Json;
 
     fn next(&mut self) -> Option<Json> {
@@ -574,26 +575,42 @@ impl Json {
         }
     }
 
-    fn index(self, off: usize) -> Result<Json> {
+    fn normalized_offset(off: isize, len: isize) -> isize {
+        let off = if off < 0 { off + len } else { off };
+        if off >= 0 && off < len { off } else { -1 }
+    }
+
+    fn index(self, off: isize) -> Result<Json> {
         match self {
-            Json::Array(mut a) => if off < a.len() {
-                    Ok(a.remove(off))
+            Json::Array(mut a) => {
+                let off = Json::normalized_offset(off, a.len() as isize);
+                if off >= 0 {
+                    Ok(a.remove(off as usize))
                 } else {
                     Err(Error::IndexUnbound(off, off))
-                },
+                }
+            },
             _ => Err(Error::NotMyType("json is not array".to_string())),
         }
     }
 
     pub fn index_ref(&self, i: usize) -> Result<&Json> {
         let a = self.array_ref()?;
-        if i < a.len() { Ok(&a[i]) } else { Err(Error::IndexUnbound(i, i)) }
+        if i < a.len() {
+            Ok(&a[i])
+        } else {
+            Err(Error::IndexUnbound(i as isize, i as isize))
+        }
     }
 
     pub fn index_mut(&mut self, i: usize) -> Result<&mut Json> {
         use json::Error::IndexUnbound;
         let a = self.array_mut()?;
-        if i < a.len() { Ok(&mut a[i]) } else { Err(IndexUnbound(i, i)) }
+        if i < a.len() {
+            Ok(&mut a[i])
+        } else {
+            Err(IndexUnbound(i as isize, i as isize))
+        }
     }
 
     pub fn get<'a>(self, key: &'a str) -> Result<Json> {
@@ -720,7 +737,7 @@ impl Document for Json {
         Ok(self.string()?)
     }
 
-    fn index(self, off: usize) -> Result<Json> {
+    fn index(self, off: isize) -> Result<Json> {
         Ok(self.index(off)?)
     }
 
@@ -728,7 +745,6 @@ impl Document for Json {
         Ok(self.get(key)?)
     }
 }
-
 
 impl Index<usize> for Json {
     type Output=Json;
@@ -846,7 +862,7 @@ impl Mul for Json {
             (Bool(false), _) => Null,
             (Bool(true), val) => val.clone(),
             (S(_), Integer(0)) => Null,
-            (S(s), Integer(n)) => S(s.repeat(n as usize)),
+            (S(s), Integer(n)) => S(s.repeat(n as usize)), // TODO: check for n > 0
             (S(_), _) => Null,
             (Object(o), Bool(true)) => Object(o.clone()),
             (Object(this), Object(other)) => {
@@ -1043,19 +1059,28 @@ impl Recurse for Json {
         self.do_recurse(&mut list);
         list
     }
-
 }
 
 impl Slice for Json {
-    fn slice(self, start: usize, end: usize) -> Option<Vec<Json>> {
-        use json::Json::Array;
+    fn slice(self, start: isize, end: isize) -> Option<Json> {
+        use json::Json::{Array, String as S};
 
         match self {
             Array(arr) => {
-                let end = if end == usize::max_value() { arr.len() } else { end };
+                let (start, end) = document::slice_range_check(
+                    start, end, arr.len() as isize
+                )?; // TODO: make this error
                 let mut res = Vec::new();
+                let start = start as usize;
+                let end = end as usize;
                 arr[start..end].iter().for_each(|item| res.push(item.clone()));
-                Some(res)
+                Some(Json::Array(res))
+            },
+            S(s) => {
+                let (start, end) = document::slice_range_check(
+                    start, end, s.len() as isize
+                )?; // TODO: make this error
+                Some(S(s[start..end].to_string()))
             },
             _ => None,
         }

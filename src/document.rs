@@ -1,8 +1,7 @@
 use std::ops::{Neg, Not, Mul, Div, Rem, Add, Sub};
 use std::ops::{Shr, Shl, BitAnd, BitXor, BitOr};
-use std::iter::{Iterator};
 use std::convert::{From};
-use std::result;
+use std::{result};
 
 use json::Json;
 use query;
@@ -23,9 +22,11 @@ pub trait Document :
 
     fn string(self) -> result::Result<String, Self::Err>;
 
-    fn index(self, off: usize) -> result::Result<Self, Self::Err>;
+    fn index(self, off: isize) -> result::Result<Self, Self::Err>;
 
     fn get<'a>(self, key: &'a str) -> result::Result<Self, Self::Err>;
+
+    //fn iter_mut(&mut self) -> I: Iterator<Item=&mut Self>;
 }
 
 pub trait And<Rhs=Self> {
@@ -45,12 +46,32 @@ pub trait Recurse : Sized {
 }
 
 pub trait Slice : Sized {
-    fn slice(self, start: usize, end: usize) -> Option<Vec<Self>>;
+    fn slice(self, start: isize, end: isize) -> Option<Self>;
 }
 
 pub trait Comprehension: Sized {
-    type Output;
+    type Output=Self;
 
     fn map_comprehend(iter: impl Iterator<Item=(Vec<String>, Vec<Self>)>) -> Vec<Self>;
     fn list_comprehend(iter: impl Iterator<Item=Vec<Self>>) -> Vec<Self>;
+}
+
+pub(super) fn slice_range_check(start: isize, end: isize, len: isize)
+    -> Option<(usize, usize)>
+{
+    let start = if start < 0 { start + len } else { start };
+    if start < 0 || start >= len { return None }
+
+    let end = if end < 0 {
+        end + len
+    } else if end == isize::max_value() {
+        len
+    } else {
+        end
+    };
+    if end < 0 || end > len { return None }
+
+    if start > end { return None }
+
+    Some((start as usize, end as usize))
 }
