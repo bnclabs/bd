@@ -25,7 +25,7 @@ named!(nom_isize(NS) -> isize,
     flat_map!(ws!(re_find!(r#"^[+-]?\d+"#)), parse_to!(isize))
 );
 named!(nom_number(NS) -> NS,
-    ws!(re_find!(r#"^[-+]?[0-9]+\.?[0-9]+([eE][-+]?[0-9]+)?"#))
+    ws!(re_find!(r#"^[-+]?[0-9]+\.?[0-9]*([eE][-+]?[0-9]+)?"#))
 );
 fn nom_json_string(text: NS) -> nom::IResult<NS, Json> {
     check_next_byte(text, b'"')?;
@@ -38,6 +38,7 @@ fn nom_json_string(text: NS) -> nom::IResult<NS, Json> {
         }
     }
 }
+#[allow(dead_code)] // TODO: Can be removed.
 fn nom_json_array(text: NS) -> nom::IResult<NS, Json> {
     check_next_byte(text, b'[')?;
     //println!("array {}", &text);
@@ -378,6 +379,7 @@ named!(nom_primary_index_short(NS) ->
 );
 named!(nom_primary_slice1(NS) -> (isize, isize, Option<NS>),
     do_parse!(
+                nom_dot >>
                 nom_open_sqr >>
          start: nom_isize >>
                 nom_dotdot    >>
@@ -390,6 +392,7 @@ named!(nom_primary_slice1(NS) -> (isize, isize, Option<NS>),
 );
 named!(nom_primary_slice2(NS) -> (isize, isize, Option<NS>),
     do_parse!(
+                nom_dot >>
                 nom_open_sqr >>
          start: nom_isize >>
                 nom_dotdot    >>
@@ -401,6 +404,7 @@ named!(nom_primary_slice2(NS) -> (isize, isize, Option<NS>),
 );
 named!(nom_primary_slice3(NS) -> (isize, isize, Option<NS>),
     do_parse!(
+                nom_dot >>
                 nom_open_sqr >>
          start: nom_isize >>
                 nom_dotdot    >>
@@ -411,6 +415,7 @@ named!(nom_primary_slice3(NS) -> (isize, isize, Option<NS>),
 );
 named!(nom_primary_slice4(NS) -> (isize, isize, Option<NS>),
     do_parse!(
+                nom_dot >>
                 nom_open_sqr >>
                 nom_dotdot    >>
            end: nom_isize >>
@@ -421,6 +426,7 @@ named!(nom_primary_slice4(NS) -> (isize, isize, Option<NS>),
 );
 named!(nom_primary_slice5(NS) -> (isize, isize, Option<NS>),
     do_parse!(
+                nom_dot >>
                 nom_open_sqr >>
                 nom_dotdot    >>
                 nom_equal >>
@@ -432,6 +438,7 @@ named!(nom_primary_slice5(NS) -> (isize, isize, Option<NS>),
 );
 named!(nom_primary_slice6(NS) -> (isize, isize, Option<NS>),
     do_parse!(
+                nom_dot >>
                 nom_open_sqr >>
                 nom_dotdot    >>
                 nom_clos_sqr >>
@@ -439,40 +446,17 @@ named!(nom_primary_slice6(NS) -> (isize, isize, Option<NS>),
         (0, isize::max_value(), opt)
     )
 );
-named!(nom_iterate_item(NS) -> Thunk,
-    map!(
-        do_parse!(
-            thunk: alt!(
-                        nom_key => { |(key, off): (Option<String>, Option<isize>)| {
-                            //println!(".......... iterate_item key {}", s);
-                            Thunk::IndexShortcut(key, off, false)
-                        }} |
-                        nom_expr
-                   ) >>
-              opt: nom_opt >>
-            (thunk, opt)
-        ),
-        |(thunk, opt)| {
-            match thunk {
-                Thunk::IndexShortcut(key, off, _) => {
-                    Thunk::IndexShortcut(key, off, opt.map_or(false, |_| true))
-                },
-                _ => unreachable!(),
-            }
-        }
-    )
-);
 named!(nom_iterate_comma_item(NS) -> Thunk,
     do_parse!(
                nom_comma >>
-        thunk: nom_iterate_item >>
+        thunk: nom_expr  >>
         (thunk)
     )
 );
 named!(nom_iterate_items(NS) -> Vec<Thunk>,
     map!(
         do_parse!(
-             item: nom_iterate_item >>
+             item: nom_expr >>
             items: opt!(many1!(nom_iterate_comma_item)) >>
             (item, items)
         ),
@@ -487,6 +471,7 @@ named!(nom_iterate_items(NS) -> Vec<Thunk>,
 );
 named!(nom_primary_full_iterate(NS) -> Option<NS>,
     do_parse!(
+                nom_dot       >>
                 nom_open_sqr  >>
                 nom_clos_sqr  >>
            opt: nom_opt       >>
@@ -495,6 +480,7 @@ named!(nom_primary_full_iterate(NS) -> Option<NS>,
 );
 named!(nom_primary_iterate(NS) -> (Vec<Thunk>, Option<NS>),
     do_parse!(
+                nom_dot       >>
                 nom_open_sqr  >>
         thunks: nom_iterate_items >>
                 nom_clos_sqr  >>
@@ -504,11 +490,13 @@ named!(nom_primary_iterate(NS) -> (Vec<Thunk>, Option<NS>),
 );
 named!(nom_primary_collection1(NS) -> (Vec<Thunk>, Option<NS>),
     do_parse!(
-                nom_open_sqr  >>
-        thunks: nom_expr_list >>
-                nom_clos_sqr  >>
-           opt: nom_opt       >>
-        (thunks, opt)
+        thunks: delimited!(
+                    nom_open_sqr,
+                    separated_list!(nom_comma, nom_expr),
+                    nom_clos_sqr
+                )       >>
+           opt: nom_opt >>
+       (thunks, opt)
     )
 );
 named!(nom_collection2_item(NS) -> (Thunk, Thunk),
@@ -519,34 +507,14 @@ named!(nom_collection2_item(NS) -> (Thunk, Thunk),
         (key,val)
     )
 );
-named!(nom_collection2_comma_item(NS) -> (Thunk, Thunk),
-    do_parse!(
-               nom_comma >>
-        thunk: nom_collection2_item >>
-        (thunk)
-    )
-);
-named!(nom_collection2_items(NS) -> Vec<(Thunk, Thunk)>,
-    map!(
-        do_parse!(
-             item: nom_collection2_item >>
-            items: opt!(many1!(nom_collection2_comma_item)) >>
-            (item, items)
-        ),
-        |(item, items)| {
-            match items {
-                Some(mut items) => { items.insert(0, item); items },
-                None => vec![item],
-            }
-        }
-    )
-);
 named!(nom_primary_collection2(NS) -> (Vec<(Thunk, Thunk)>, Option<NS>),
     do_parse!(
-               nom_open_brace  >>
-        items: nom_collection2_items >>
-               nom_clos_brace  >>
-          opt: nom_opt       >>
+        items: delimited!(
+                    nom_open_brace,
+                    separated_list!(nom_comma, nom_collection2_item),
+                    nom_clos_brace
+               )        >>
+          opt: nom_opt  >>
         (items, opt)
     )
 );
@@ -574,27 +542,48 @@ named!(nom_primary_unarynot_expr(NS) -> Thunk,
         (thunk)
     )
 );
-named!(nom_primary_literal(NS) -> Thunk,
-    alt!(
-        nom_null  => { |_| Thunk::Literal(Json::Null) } |
-        nom_true  => { |_| Thunk::Literal(Json::Bool(true)) } |
-        nom_false => { |_| Thunk::Literal(Json::Bool(false)) } |
-        nom_number => { number_literal } |
-        nom_json_string => { |s| Thunk::Literal(s) } |
-        nom_json_array => { |a| Thunk::Literal(a) } |
-        nom_json_object => { |o| Thunk::Literal(o) }
+named!(nom_primary_literal(NS) -> (Thunk, Option<NS>),
+    do_parse!(
+        thunk: alt!(
+                nom_null  => { |_| Thunk::Literal(Json::Null, false) } |
+                nom_true  => { |_| Thunk::Literal(Json::Bool(true), false) } |
+                nom_false => { |_| Thunk::Literal(Json::Bool(false), false) } |
+                nom_number => { number_literal } |
+                nom_json_string => { |s| Thunk::Literal(s, false) } |
+                // TODO: This is redundant in place of collection-list.
+                // nom_json_array => { |a| Thunk::Literal(a, false) } |
+                nom_json_object => { |o| Thunk::Literal(o, false) }
+               ) >>
+          opt: nom_opt >>
+        (thunk, opt)
     )
 );
 named!(nom_primary_builtins(NS) -> (NS, Vec<Thunk>),
     do_parse!(
         funcname: nom_identifier >>
-                  nom_open_paran >>
-            args: nom_expr_list  >>
-                  nom_clos_paran >>
+            args: delimited!(
+                    nom_open_paran,
+                    separated_list!(nom_comma, nom_expr),
+                    nom_clos_paran
+                  ) >>
         (funcname, args)
     )
 );
 
+named!(nom_primary_identifier_opt(NS) -> (NS, Option<NS>),
+    do_parse!(
+        thunk: nom_identifier >>
+          opt: nom_opt        >>
+        (thunk, opt)
+    )
+);
+
+// NOTE: There is contention between
+// slice operation,
+// index operation,
+// iterate operation,
+// array literal
+// collection list
 named!(nom_primary_expr(NS) -> Thunk,
     alt!(
         nom_primary_slice1 => { slice_to_thunk } |
@@ -605,7 +594,8 @@ named!(nom_primary_expr(NS) -> Thunk,
         nom_primary_slice6 => { slice_to_thunk } |
         nom_primary_full_iterate => { full_iterate_to_thunk } |
         nom_primary_iterate => { iterate_to_thunk } |
-        nom_primary_literal | // should come before identifier
+        nom_primary_literal => { literal_to_thunk } | // should come before identifier
+        nom_primary_identifier_opt => { identifier_to_literal } |
         nom_primary_builtins => { builtin_to_thunk } |
         nom_primary_collection1 => { collection1_to_thunk } |
         nom_primary_collection2 => { collection2_to_thunk } |
@@ -615,30 +605,6 @@ named!(nom_primary_expr(NS) -> Thunk,
         nom_primary_paran_expr |
         nom_dotdot => { |_| Thunk::Recurse } |
         nom_dot => { |_| Thunk::Identity }
-    )
-);
-
-named!(nom_comma_expr(NS) -> Thunk,
-    do_parse!(
-               nom_comma >>
-        thunk: nom_expr  >>
-        (thunk)
-    )
-);
-named!(nom_expr_list(NS) -> Vec<Thunk>,
-    map!(
-        do_parse!(
-             thunk:  nom_expr                      >>
-            thunks: opt!(many1!(nom_comma_expr))  >>
-            (thunk, thunks)
-        ),
-        |(thunk, thunks)| {
-            //println!(".......... expr list {:?}", thunk);
-            match thunks {
-                Some(mut thunks) => { thunks.insert(0, thunk); thunks },
-                None => vec![thunk]
-            }
-        }
     )
 );
 
@@ -657,6 +623,17 @@ named!(nom_program(NS) -> Thunk,
     ))
 );
 
+
+fn identifier_to_literal((s, opt): (NS, Option<NS>)) -> Thunk {
+    Thunk::IndexShortcut(Some((&s).to_string()), None, opt.map_or(false, |_| true))
+}
+
+fn literal_to_thunk((thunk, opt): (Thunk, Option<NS>)) -> Thunk {
+    match thunk {
+        Thunk::Literal(val, _) => Thunk::Literal(val, opt.map_or(false, |_| true)),
+        _ => unreachable!(),
+    }
+}
 
 fn builtin_to_thunk((funcname, args): (NS, Vec<Thunk>)) -> Thunk {
     Thunk::Builtin(funcname.to_string(), args)
@@ -680,9 +657,9 @@ fn slice_to_thunk((start, end, opt): (isize, isize, Option<NS>))
 fn number_literal(s: NS) -> Thunk {
     //println!("number_literal ..... {:?}", s);
     if let Ok(n) = (&s).parse::<i128>() {
-        Thunk::Literal(Json::Integer(n))
+        Thunk::Literal(Json::Integer(n), false)
     } else if let Ok(f) = (&s).parse::<f64>() {
-        Thunk::Literal(Json::Float(f))
+        Thunk::Literal(Json::Float(f), false)
     } else {
         unreachable!()
     }
@@ -691,25 +668,24 @@ fn number_literal(s: NS) -> Thunk {
 fn full_iterate_to_thunk(opt: Option<NS>) -> Thunk {
     let opt = opt.map_or(false, |_| true);
     //println!("full iterate ........ {:?}", thunks);
-    let thunks: Vec<Thunk> = vec![];
-    Thunk::Iterate(thunks, opt)
+    Thunk::IterateValues(opt)
 }
 
 fn iterate_to_thunk((thunks, opt): (Vec<Thunk>, Option<NS>)) -> Thunk {
-    let opt = opt.map_or(false, |_| true);
+    let opt1 = opt.map_or(false, |_| true);
     //println!("iterate ........ {:?}", thunks);
     let thunks = thunks.into_iter().map(|thunk|
         match thunk {
-            Thunk::Literal(Json::Integer(n)) => {
-                Thunk::IndexShortcut(None, Some(n as isize), opt)
+            Thunk::Literal(Json::Integer(n), opt2) => {
+                Thunk::IndexShortcut(None, Some(n as isize), opt1 || opt2)
             },
-            Thunk::Literal(Json::String(s)) => {
-                Thunk::IndexShortcut(Some(s), None, opt)
+            Thunk::Literal(Json::String(s), opt2) => {
+                Thunk::IndexShortcut(Some(s), None, opt1 || opt2)
             },
             thunk => thunk,
         }
     ).collect();
-    Thunk::Iterate(thunks, opt)
+    Thunk::Iterate(thunks, opt1)
 }
 
 fn collection1_to_thunk((thunks, opt): (Vec<Thunk>, Option<NS>)) -> Thunk {
@@ -719,7 +695,6 @@ fn collection1_to_thunk((thunks, opt): (Vec<Thunk>, Option<NS>)) -> Thunk {
 fn collection2_to_thunk((items, opt): (Vec<(Thunk,Thunk)>, Option<NS>)) -> Thunk {
     Thunk::Dict(items, opt.map_or(false, |_| true))
 }
-
 
 
 fn check_next_byte(text: NS, b: u8) -> nom::IResult<NS, ()> {

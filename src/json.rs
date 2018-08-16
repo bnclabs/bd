@@ -1,15 +1,16 @@
 use std::{self, result, char, error, io};
 use std::str::{self, FromStr,CharIndices};
 use std::fmt::{self, Write};
-use std::cmp::Ordering;
 use std::ops::{Neg, Not, Mul, Div, Rem, Add, Sub, Shr, Shl};
 use std::ops::{BitAnd, BitXor, BitOr, Index, IndexMut};
 use std::ops::{Range, RangeFrom, RangeTo, RangeToInclusive, RangeInclusive};
 use std::ops::{RangeFull};
-use std::slice;
+use std::vec;
 
-use document::{self, And, Or, Document, Recurse, Slice, Comprehension};
+use document::{Document, KeyValue};
+use document::{And, Or, Recurse, Slice, Comprehension};
 use lex::Lex;
+use util;
 
 include!("./json.rs.lookup");
 
@@ -418,7 +419,7 @@ pub(super) fn parse_object(text: &str, lex: &mut Lex) -> Result<Json> {
 
         let i = search_by_key(&m, &key).unwrap_or_else(|e| e.key_missing_at());
         //println!("parse {} {} {:?}", key, i, m);
-        m.insert(i, KeyValue(key, value));
+        m.insert(i, Property::new(key, value));
 
         // is exit
         parse_whitespace(text, lex);
@@ -470,34 +471,8 @@ fn check_eof(text: &str, lex: &mut Lex) -> Result<()> {
 }
 
 
-#[derive(Debug,Clone)]
-pub struct KeyValue(pub String, pub Json);
+type Property = KeyValue<Json>;
 
-impl Eq for KeyValue {}
-
-impl PartialEq for KeyValue {
-    fn eq(&self, other: &KeyValue) -> bool {
-        self.0.eq(&other.0) // compare only the key.
-    }
-}
-
-impl PartialOrd for KeyValue {
-    fn partial_cmp(&self, other: &KeyValue) -> Option<Ordering> {
-        Some(self.0.cmp(&other.0)) // compare only the key.
-    }
-}
-
-impl Ord for KeyValue {
-    fn cmp(&self, other: &KeyValue) -> Ordering {
-        self.0.cmp(&other.0) // compare only the key.
-    }
-}
-
-impl From<String> for KeyValue {
-    fn from(key: String) -> KeyValue {
-        KeyValue(key, Json::Null)
-    }
-}
 
 #[derive(Clone,PartialEq,PartialOrd)]
 pub enum Json {
@@ -507,7 +482,7 @@ pub enum Json {
     Float(f64),
     String(String),
     Array(Vec<Json>),
-    Object(Vec<KeyValue>),
+    Object(Vec<Property>),
 }
 
 impl Json {
@@ -533,14 +508,14 @@ impl Json {
         }
     }
 
-    pub fn object_ref(&self) -> Result<&Vec<KeyValue>> {
+    pub fn object_ref(&self) -> Result<&Vec<Property>> {
         match self {
             Json::Object(o) => Ok(o),
             _ => Err(Error::NotMyType("json is not object".to_string()))
         }
     }
 
-    pub fn object_mut(&mut self) -> Result<&mut Vec<KeyValue>> {
+    pub fn object_mut(&mut self) -> Result<&mut Vec<Property>> {
         match self {
             Json::Object(o) => Ok(o),
             _ => Err(Error::NotMyType("json is not object".to_string()))
@@ -575,16 +550,11 @@ impl Json {
         }
     }
 
-    fn normalized_offset(off: isize, len: isize) -> isize {
-        let off = if off < 0 { off + len } else { off };
-        if off >= 0 && off < len { off } else { -1 }
-    }
-
     fn index(self, off: isize) -> Result<Json> {
         match self {
             Json::Array(mut a) => {
-                let off = Json::normalized_offset(off, a.len() as isize);
-                if off >= 0 {
+                let len = a.len() as isize;
+                if let Some(off) = util::normalized_offset(off, len) {
                     Ok(a.remove(off as usize))
                 } else {
                     Err(Error::IndexUnbound(off, off))
@@ -617,7 +587,7 @@ impl Json {
         match self {
             Json::Object(mut obj) => {
                 let off = search_by_key(&obj, key)?;
-                Ok(obj.remove(off).1)
+                Ok(obj.remove(off).value())
             },
             _ => Err(Error::NotMyType("json is not object".to_string()))
         }
@@ -626,18 +596,18 @@ impl Json {
     pub fn get_ref<'a>(&self, key: &'a str) -> Result<&Json> {
         let obj = self.object_ref()?;
         let off = search_by_key(obj, key)?;
-        Ok(&obj[off].1)
+        Ok(obj[off].value_ref())
     }
 
     pub fn get_mut<'a>(&mut self, key: &'a str) -> Result<&mut Json> {
         let obj = self.object_mut()?;
         let off = search_by_key(obj, key)?;
-        Ok(&mut obj[off].1)
+        Ok(obj[off].value_mut())
     }
 
-    pub fn upsert_key(&mut self, kv: KeyValue) {
+    pub fn upsert_key(&mut self, kv: Property) {
         let o = self.object_mut().unwrap();
-        let i = search_by_key(&o, &kv.0).unwrap_or_else(|e| e.key_missing_at());
+        let i = search_by_key(&o, kv.key_ref()).unwrap_or_else(|e| e.key_missing_at());
         o.insert(i, kv);
     }
 
@@ -654,9 +624,15 @@ impl Json {
             },
             Object(val) => {
                 list.push(Object(val.clone()));
-                val.iter().for_each(|item| item.1.do_recurse(list))
+                val.iter().for_each(|item| item.value_ref().do_recurse(list))
             },
         }
+    }
+}
+
+impl Default for Json {
+    fn default() -> Json {
+        Json::Null
     }
 }
 
@@ -713,8 +689,8 @@ impl fmt::Display for Json {
                 } else {
                     write!(f, "{{")?;
                     for (i, kv) in val.iter().enumerate() {
-                        Self::encode_string(f, &kv.0)?;
-                        write!(f, ":{}", kv.1)?;
+                        Self::encode_string(f, kv.key_ref())?;
+                        write!(f, ":{}", kv.value_ref())?;
                         if i < (val_len - 1) { write!(f, ",")?; }
                     }
                     write!(f, "}}")
@@ -743,6 +719,19 @@ impl Document for Json {
 
     fn get<'a>(self, key: &'a str) -> Result<Json> {
         Ok(self.get(key)?)
+    }
+
+    fn values(self) -> Option<Box<Iterator<Item=Json>>> {
+        match self {
+            Json::Array(arr) => {
+                Some(Box::new(arr.into_iter()))
+            },
+            Json::Object(obj) => {
+                let iter = PropertyIter{iter: obj.into_iter()};
+                Some(Box::new(iter))
+            },
+            _ => None
+        }
     }
 }
 
@@ -1054,6 +1043,8 @@ impl Or for Json {
 }
 
 impl Recurse for Json {
+    type Output=Vec<Json>;
+
     fn recurse(&self) -> Vec<Json> {
         let mut list = Vec::new();
         self.do_recurse(&mut list);
@@ -1062,12 +1053,14 @@ impl Recurse for Json {
 }
 
 impl Slice for Json {
+    type Output=Option<Json>;
+
     fn slice(self, start: isize, end: isize) -> Option<Json> {
         use json::Json::{Array, String as S};
 
         match self {
             Array(arr) => {
-                let (start, end) = document::slice_range_check(
+                let (start, end) = util::slice_range_check(
                     start, end, arr.len() as isize
                 )?; // TODO: make this error
                 let mut res = Vec::new();
@@ -1077,7 +1070,7 @@ impl Slice for Json {
                 Some(Json::Array(res))
             },
             S(s) => {
-                let (start, end) = document::slice_range_check(
+                let (start, end) = util::slice_range_check(
                     start, end, s.len() as isize
                 )?; // TODO: make this error
                 Some(S(s[start..end].to_string()))
@@ -1086,7 +1079,6 @@ impl Slice for Json {
         }
     }
 }
-
 
 impl Comprehension for Json {
     type Output=Vec<Json>;
@@ -1104,14 +1096,14 @@ impl Comprehension for Json {
     {
         let mut dicts: Vec<Json> = vec![Json::Object(vec![])];
 
-        let insert_dicts = |dicts: &mut Vec<Json>, kv: &KeyValue| {
+        let insert_dicts = |dicts: &mut Vec<Json>, kv: &Property| {
             dicts.iter_mut().for_each(|dict| { dict.upsert_key(kv.clone()); });
         };
 
         for (keys, vals) in iter {
             for (i, key) in keys.into_iter().enumerate() {
                 for (j, val) in vals.clone().into_iter().enumerate() {
-                    let kv = KeyValue(key.clone(), val);
+                    let kv = Property::new(key.clone(), val);
                     if i == 0 && j == 0 {
                         insert_dicts(&mut dicts, &kv);
                         continue
@@ -1126,7 +1118,7 @@ impl Comprehension for Json {
     }
 }
 
-fn search_by_key(obj: &Vec<KeyValue>, key: &str) -> Result<usize> {
+fn search_by_key(obj: &Vec<Property>, key: &str) -> Result<usize> {
     use std::cmp::Ordering::{Greater, Equal, Less};
 
     let mut size = obj.len();
@@ -1141,12 +1133,12 @@ fn search_by_key(obj: &Vec<KeyValue>, key: &str) -> Result<usize> {
         // mid is always in [0, size), that means mid is >= 0 and < size.
         // mid >= 0: by definition
         // mid < size: mid = size / 2 + size / 4 + size / 8 ...
-        let item: &str = &obj[mid].0;
+        let item: &str = obj[mid].key_ref();
         base = if item.cmp(key) == Greater { base } else { mid };
         size -= half;
     }
     // base is always in [0, size) because base <= mid.
-    let item: &str = &obj[base].0;
+    let item: &str = obj[base].key_ref();
     let cmp = item.cmp(key);
     if cmp == Equal {
         Ok(base)
@@ -1155,36 +1147,53 @@ fn search_by_key(obj: &Vec<KeyValue>, key: &str) -> Result<usize> {
     }
 }
 
-fn merge_object(mut this: Vec<KeyValue>, other: Vec<KeyValue>)
-    -> Vec<KeyValue>
+fn merge_object(mut this: Vec<Property>, other: Vec<Property>)
+    -> Vec<Property>
 {
     for o in other.into_iter() {
-        let i = search_by_key(&this, &o.0)
+        let i = search_by_key(&this, o.key_ref())
                 .unwrap_or_else(|e| e.key_missing_at());
         this.insert(i, o)
     }
     this
 }
 
-fn mixin_object(mut this: Vec<KeyValue>, other: Vec<KeyValue>)
-    -> Vec<KeyValue>
+fn mixin_object(mut this: Vec<Property>, other: Vec<Property>)
+    -> Vec<Property>
 {
     use json::Json::{Object};
     use json::Error::{KeyMissing};
 
     for o in other.into_iter() {
-        match search_by_key(&this, &o.0) {
-            Ok(i) => match (this[i].clone().1, o) {
-                (Object(val), KeyValue(_, Object(val2))) => {
-                    this[i].1 = Object(mixin_object(val, val2))
+        match search_by_key(&this, o.key_ref()) {
+            Ok(i) => match (this[i].clone().value(), o.clone().value()) {
+                (Object(val), Object(val2)) => {
+                    this[i].set_value(Object(mixin_object(val, val2)))
                 },
-                (_, o) => this.insert(i, o)
+                _ => this.insert(i, o)
             },
             Err(KeyMissing(i, _)) => this.insert(i, o.clone()),
             _ => unreachable!(),
         }
     }
     this
+}
+
+
+struct PropertyIter {
+    iter: vec::IntoIter<Property>,
+}
+
+impl Iterator for PropertyIter {
+    type Item=Json;
+
+    fn next(&mut self) -> Option<Json> {
+        if let Some(property) = self.iter.next() {
+            Some(property.value())
+        } else {
+            None
+        }
+    }
 }
 
 #[cfg(test)]
@@ -1207,36 +1216,36 @@ mod tests {
         n -= 1;
 
         let mut obj = Vec::new();
-        let kv = KeyValue("key1".to_string(), r#""value1""#.parse().unwrap());
-        obj.insert(0, kv);
+        let (k, v) = ("key1".to_string(), r#""value1""#.parse().unwrap());
+        obj.insert(0, Property::new(k, v));
         refs[refs_len - n] = Object(obj);
         n -= 1;
 
         let mut obj = Vec::new();
-        let kv = KeyValue("key1".to_string(), r#""value1""#.parse().unwrap());
-        obj.insert(0, kv);
-        let kv = KeyValue("key2".to_string(), r#""value2""#.parse().unwrap());
-        obj.insert(1, kv);
+        let (k, v) = ("key1".to_string(), r#""value1""#.parse().unwrap());
+        obj.insert(0, Property::new(k, v));
+        let (k, v) = ("key2".to_string(), r#""value2""#.parse().unwrap());
+        obj.insert(1, Property::new(k, v));
         refs[refs_len - n] = Object(obj);
         n -= 1;
 
         let mut obj = Vec::new();
-        let kv = KeyValue("a".to_string(), "1".parse().unwrap());
-        obj.insert(0, kv);
-        let kv = KeyValue("b".to_string(), "1".parse().unwrap());
-        obj.insert(1, kv);
-        let kv = KeyValue("c".to_string(), "1".parse().unwrap());
-        obj.insert(2, kv);
-        let kv = KeyValue("d".to_string(), "1".parse().unwrap());
-        obj.insert(3, kv);
-        let kv = KeyValue("e".to_string(), "1".parse().unwrap());
-        obj.insert(4, kv);
-        let kv = KeyValue("f".to_string(), "1".parse().unwrap());
-        obj.insert(5, kv);
-        let kv = KeyValue("x".to_string(), "1".parse().unwrap());
-        obj.insert(6, kv);
-        let kv = KeyValue("z".to_string(), "1".parse().unwrap());
-        obj.insert(7, kv);
+        let (k, v) = ("a".to_string(), "1".parse().unwrap());
+        obj.insert(0, Property::new(k, v));
+        let (k, v) = ("b".to_string(), "1".parse().unwrap());
+        obj.insert(1, Property::new(k, v));
+        let (k, v) = ("c".to_string(), "1".parse().unwrap());
+        obj.insert(2, Property::new(k, v));
+        let (k, v) = ("d".to_string(), "1".parse().unwrap());
+        obj.insert(3, Property::new(k, v));
+        let (k, v) = ("e".to_string(), "1".parse().unwrap());
+        obj.insert(4, Property::new(k, v));
+        let (k, v) = ("f".to_string(), "1".parse().unwrap());
+        obj.insert(5, Property::new(k, v));
+        let (k, v) = ("x".to_string(), "1".parse().unwrap());
+        obj.insert(6, Property::new(k, v));
+        let (k, v) = ("z".to_string(), "1".parse().unwrap());
+        obj.insert(7, Property::new(k, v));
         refs[refs_len - n] = Object(obj);
 
         jsonbuf.set(jsons[51]);
@@ -1266,7 +1275,7 @@ mod tests {
         assert_eq!(Some(Bool(false)), iter.next());
         assert_eq!(Some(Array(vec![Integer(1), Integer(2)])), iter.next());
         assert_eq!(
-            Some(Object(vec![KeyValue("a".to_string(), Integer(10))])),
+            Some(Object(vec![Property::new("a".to_string(), Integer(10))])),
             iter.next(),
         );
     }

@@ -2,13 +2,14 @@ use std::ops::{Neg, Not, Mul, Div, Rem, Add, Sub};
 use std::ops::{Shr, Shl, BitAnd, BitXor, BitOr};
 use std::convert::{From};
 use std::{result};
+use std::cmp::Ordering;
 
 use json::Json;
 use query;
 
 // TODO: why should document be marked as Sized ?
 pub trait Document :
-    Clone + Sized + From<bool> + From<Json> +
+    Default + Clone + Sized + From<bool> + From<Json> +
     Neg<Output=Self> + Not<Output=Self> +
     Mul<Output=Self> + Div<Output=Self> + Rem<Output=Self> +
     Add<Output=Self> + Sub<Output=Self> +
@@ -16,7 +17,7 @@ pub trait Document :
     BitAnd<Output=Self> + BitXor<Output=Self> + BitOr<Output=Self> +
     PartialEq + PartialOrd +
     And<Output=Self> + Or<Output=Self> +
-    Recurse + Slice + Comprehension {
+    Recurse<Output=Vec<Self>> + Slice<Output=Option<Self>> + Comprehension<Output=Vec<Self>> {
 
     type Err: Into<query::Error>;
 
@@ -26,7 +27,7 @@ pub trait Document :
 
     fn get<'a>(self, key: &'a str) -> result::Result<Self, Self::Err>;
 
-    //fn iter_mut(&mut self) -> I: Iterator<Item=&mut Self>;
+    fn values<'a>(self) -> Option<Box<Iterator<Item=Self>>>;
 }
 
 pub trait And<Rhs=Self> {
@@ -42,36 +43,87 @@ pub trait Or<Rhs=Self> {
 }
 
 pub trait Recurse : Sized {
-    fn recurse(&self) -> Vec<Self>;
+    type Output=Vec<Self>;
+
+    fn recurse(&self) -> Self::Output;
 }
 
 pub trait Slice : Sized {
-    fn slice(self, start: isize, end: isize) -> Option<Self>;
+    type Output=Option<Self>;
+
+    fn slice(self, start: isize, end: isize) -> Self::Output;
 }
 
 pub trait Comprehension: Sized {
-    type Output=Self;
+    type Output=Vec<Self>;
 
-    fn map_comprehend(iter: impl Iterator<Item=(Vec<String>, Vec<Self>)>) -> Vec<Self>;
-    fn list_comprehend(iter: impl Iterator<Item=Vec<Self>>) -> Vec<Self>;
+    fn map_comprehend(iter: impl Iterator<Item=(Vec<String>, Vec<Self>)>) -> Self::Output;
+    fn list_comprehend(iter: impl Iterator<Item=Vec<Self>>) -> Self::Output;
 }
 
-pub(super) fn slice_range_check(start: isize, end: isize, len: isize)
-    -> Option<(usize, usize)>
-{
-    let start = if start < 0 { start + len } else { start };
-    if start < 0 || start >= len { return None }
 
-    let end = if end < 0 {
-        end + len
-    } else if end == isize::max_value() {
-        len
-    } else {
-        end
-    };
-    if end < 0 || end > len { return None }
+#[derive(Debug,Clone)]
+pub struct KeyValue<D>(String, D) where D: Document;
 
-    if start > end { return None }
+impl<D> Eq for KeyValue<D> where D: Document {}
 
-    Some((start as usize, end as usize))
+impl<D> PartialEq for KeyValue<D> where D: Document {
+    fn eq(&self, other: &KeyValue<D>) -> bool {
+        self.0.eq(&other.0) // compare only the key.
+    }
+}
+
+impl<D> PartialOrd for KeyValue<D> where D: Document {
+    fn partial_cmp(&self, other: &KeyValue<D>) -> Option<Ordering> {
+        Some(self.0.cmp(&other.0)) // compare only the key.
+    }
+}
+
+impl<D> Ord for KeyValue<D> where D: Document {
+    fn cmp(&self, other: &KeyValue<D>) -> Ordering {
+        self.0.cmp(&other.0) // compare only the key.
+    }
+}
+
+impl<D> From<String> for KeyValue<D> where D: Document {
+    fn from(key: String) -> KeyValue<D> {
+        KeyValue::new(key, D::default())
+    }
+}
+
+impl<D> KeyValue<D> where D: Document {
+    #[inline]
+    pub fn new(key: String, value: D) -> KeyValue<D> {
+        KeyValue(key, value)
+    }
+
+    #[inline]
+    pub fn key(self) -> String {
+        self.0
+    }
+
+    #[inline]
+    pub fn key_ref(&self) -> &str {
+        &self.0
+    }
+
+    #[inline]
+    pub fn value(self) -> D {
+        self.1
+    }
+
+    #[inline]
+    pub fn value_ref(&self) -> &D {
+        &self.1
+    }
+
+    #[inline]
+    pub fn value_mut(&mut self) -> &mut D {
+        &mut self.1
+    }
+
+    #[inline]
+    pub fn set_value(&mut self, value: D) {
+        self.1 = value;
+    }
 }

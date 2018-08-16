@@ -6,8 +6,10 @@ use nom::{self, {types::CompleteStr as NS}};
 
 use json::{self, Json};
 use query_nom::parse_program_nom;
-use document::Document;
+use document::{Document};
 
+// TODO: Parametrise Thunk over different types of Document.
+// TODO: Better to replace panic with assert!() macro.
 
 type Output<D> = Vec<D>;
 
@@ -82,9 +84,10 @@ pub enum Thunk where {
     Empty,
     Identity,
     Recurse,
-    Literal(Json),
+    Literal(Json, bool),
     IndexShortcut(Option<String>, Option<isize>, bool),
     Slice(isize, isize, bool),
+    IterateValues(bool),
     Iterate(Vec<Thunk>, bool),
     List(Vec<Thunk>, bool),
     Dict(Vec<(Thunk, Thunk)>, bool),
@@ -141,7 +144,7 @@ impl<D> FnMut<(D,)> for Thunk where D: Document {
                 Ok(doc.recurse())
             },
 
-            Literal(literal) => { // vecot of single item
+            Literal(literal, _) => { // vecot of single item
                 Ok(vec![D::from(literal.clone())])
             },
 
@@ -164,8 +167,8 @@ impl<D> FnMut<(D,)> for Thunk where D: Document {
                 if *opt && res.is_err() { Ok(vec![]) } else { Ok(vec![res?]) }
             },
 
-            Iterate(ref mut thunks, opt) if thunks.len() == 0 => {
-                let res = do_full_iterate(thunks, *opt, doc);
+            IterateValues(opt) => {
+                let res = do_iterate_values(doc);
                 if *opt && res.is_err() { Ok(vec![]) } else { Ok(res?) }
             },
 
@@ -230,12 +233,12 @@ fn do_index_shortcut<D>(off: isize, doc: D)
     doc.index(off).map_err(Into::into)
 }
 
-fn do_full_iterate<D>(_thunks: &mut Vec<Thunk>, _opt: bool, _doc: D)
-    -> Result<Output<D>> where D: Document
-{
-    let out = Vec::new();
-    //doc.into_iter().for_each(|item| out.push(item));
-    Ok(out)
+fn do_iterate_values<D>(doc: D) -> Result<Output<D>> where D: Document {
+    if let Some(iter) = doc.values() {
+        Ok(iter.collect())
+    } else {
+        Err(Error::Op(None, "not an iterable".to_string()))
+    }
 }
 
 fn do_iterate<D>(thunks: &mut Vec<Thunk>, opt: bool, doc: D)
@@ -512,7 +515,7 @@ fn do_pipe<D>(lthunk: &mut Thunk, rthunk: &mut Thunk, doc: D)
 mod test {
     use super::*;
     use json::Json;
-    use json::Json::{Null, Bool, Integer, Float, Array, Object, String as S};
+    use json::Json::{Integer, String as S};
 
     #[test]
     fn test_query_empty() {
@@ -730,12 +733,57 @@ mod test {
         assert_eq!(refval, &format!("{:?}", thunk(doc.clone()).unwrap()));
     }
 
-    //#[test]
-    //fn test_query_iterator() {
-    //    let mut thunk: Thunk = ".[]".parse().unwrap();
+    #[test]
+    fn test_query_iterator() {
+        let mut thunk: Thunk = ".[]".parse().unwrap();
 
-    //    let doc: Json = r#"[1,2,3]"#.parse().unwrap();
-    //    let refval = r#"[1,2,3]"#;
-    //    assert_eq!(refval, &format!("{:?}", thunk(doc.clone()).unwrap()));
-    //}
+        let doc: Json = r#"[1,2,3]"#.parse().unwrap();
+        let refval = r#"[1, 2, 3]"#;
+        assert_eq!(refval, &format!("{:?}", thunk(doc.clone()).unwrap()));
+
+        thunk = ".[]".parse().unwrap();
+        let doc: Json = r#"{"a": true, "b": 2, "c": null}"#.parse().unwrap();
+        let refval = r#"[true, 2, null]"#;
+        assert_eq!(refval, &format!("{:?}", thunk(doc.clone()).unwrap()));
+
+        thunk = ".[]".parse().unwrap();
+        let doc = r#"[{"name":"JSON", "good":true}, {"name":"XML", "good":false}]"#;
+        let doc: Json = doc.parse().unwrap();
+        let refval = r#"[{"good":true,"name":"JSON"}, {"good":false,"name":"XML"}]"#;
+        assert_eq!(refval, &format!("{:?}", thunk(doc.clone()).unwrap()));
+
+        thunk = ".[]".parse().unwrap();
+        let doc: Json = r#"[]"#.parse().unwrap();
+        let refval = r#"[]"#;
+        assert_eq!(refval, &format!("{:?}", thunk(doc.clone()).unwrap()));
+
+        thunk = ".[]".parse().unwrap();
+        let doc: Json = r#"{"a": 1, "b": 1}"#.parse().unwrap();
+        let refval = r#"[1, 1]"#;
+        assert_eq!(refval, &format!("{:?}", thunk(doc.clone()).unwrap()));
+
+        thunk = ".[]".parse().unwrap();
+        let doc: Json = r#"10"#.parse().unwrap();
+        assert_eq!(
+            Err(Error::Op(None, "not an iterable".to_string())),
+            thunk(doc.clone())
+        );
+
+        thunk = ".[]?".parse().unwrap();
+        let doc: Json = r#"10"#.parse().unwrap();
+        let refval = r#"[]"#;
+        assert_eq!(refval, &format!("{:?}", thunk(doc.clone()).unwrap()));
+
+        thunk = ".[foo, bar]".parse().unwrap();
+        let doc = r#"{"foo": 42, "bar": "something else", "baz": true}"#;
+        let doc: Json = doc.parse().unwrap();
+        let refval = r#"[42, "something else"]"#;
+        assert_eq!(refval, &format!("{:?}", thunk(doc.clone()).unwrap()));
+
+        thunk = ".[user, projects.[]]".parse().unwrap();
+        let doc = r#"{"user":"stedolan", "projects": ["jq", "wikiflow"]}"#;
+        let doc: Json = doc.parse().unwrap();
+        let refval = r#"["stedolan", "jq", "wikiflow"]"#;
+        assert_eq!(refval, &format!("{:?}", thunk(doc.clone()).unwrap()));
+    }
 }

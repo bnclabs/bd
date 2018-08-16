@@ -17,6 +17,7 @@ pub mod query;
 mod query_nom;
 mod document;
 mod lex;
+mod util;
 
 #[cfg(test)]
 mod tests {
