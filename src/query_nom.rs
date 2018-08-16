@@ -13,10 +13,10 @@ named!(nom_open_sqr(NS) -> NS, ws!(tag!("[")));
 named!(nom_clos_sqr(NS) -> NS, ws!(tag!("]")));
 named!(nom_open_brace(NS) -> NS, ws!(tag!("{")));
 named!(nom_clos_brace(NS) -> NS, ws!(tag!("}")));
-named!(nom_open_paran(NS) -> NS, ws!(tag!(")")));
+named!(nom_open_paran(NS) -> NS, ws!(tag!("(")));
 named!(nom_clos_paran(NS) -> NS, ws!(tag!(")")));
 named!(nom_opt(NS) -> Option<NS>, opt!(ws!(tag!("?"))));
-named!(nom_identifier(NS) -> NS, ws!(re_find!(r"^[A-Za-z_][0-9A-Za-z_]+")));
+named!(nom_identifier(NS) -> NS, ws!(re_find!(r"^[A-Za-z_][0-9A-Za-z_]*")));
 
 named!(nom_null(NS) -> NS, ws!(tag!("null")));
 named!(nom_true(NS) -> NS, ws!(tag!("true")));
@@ -24,6 +24,8 @@ named!(nom_false(NS) -> NS, ws!(tag!("false")));
 named!(nom_isize(NS) -> isize,
     flat_map!(ws!(re_find!(r#"^[+-]?\d+"#)), parse_to!(isize))
 );
+// TODO: number syntax have conflict with `dot` syntax, for example
+// number should start with 0.1 instead of .1
 named!(nom_number(NS) -> NS,
     ws!(re_find!(r#"^[-+]?[0-9]+\.?[0-9]*([eE][-+]?[0-9]+)?"#))
 );
@@ -595,11 +597,11 @@ named!(nom_primary_expr(NS) -> Thunk,
         nom_primary_full_iterate => { full_iterate_to_thunk } |
         nom_primary_iterate => { iterate_to_thunk } |
         nom_primary_literal => { literal_to_thunk } | // should come before identifier
+        nom_primary_index_short => { index_short_to_thunk } |
         nom_primary_identifier_opt => { identifier_to_literal } |
         nom_primary_builtins => { builtin_to_thunk } |
         nom_primary_collection1 => { collection1_to_thunk } |
         nom_primary_collection2 => { collection2_to_thunk } |
-        nom_primary_index_short => { index_short_to_thunk } |
         nom_primary_unarynot_expr => { |thunk| Thunk::Not(Box::new(thunk)) } |
         nom_primary_unaryneg_expr => { |thunk| Thunk::Neg(Box::new(thunk)) } |
         nom_primary_paran_expr |

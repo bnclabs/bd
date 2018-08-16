@@ -786,4 +786,48 @@ mod test {
         let refval = r#"["stedolan", "jq", "wikiflow"]"#;
         assert_eq!(refval, &format!("{:?}", thunk(doc.clone()).unwrap()));
     }
+
+    #[test]
+    fn test_query_pipe() {
+        let mut thunk: Thunk = ".[] | foo".parse().unwrap();
+
+        let doc: Json = r#"[{"foo": 10}, {"foo":20}]"#.parse().unwrap();
+        let refval = r#"[10, 20]"#;
+        assert_eq!(refval, &format!("{:?}", thunk(doc.clone()).unwrap()));
+
+        thunk = ".[] | .foo ".parse().unwrap();
+        let doc: Json = r#"[{"foo": 10}, {"foo":20}]"#.parse().unwrap();
+        let refval = r#"[10, 20]"#;
+        assert_eq!(refval, &format!("{:?}", thunk(doc.clone()).unwrap()));
+
+
+        thunk = ".a.b.c".parse().unwrap();
+        let doc: Json = r#"{"a": {"b": {"c": 100}}}"#.parse().unwrap();
+        let refval = r#"[100]"#;
+        assert_eq!(refval, &format!("{:?}", thunk(doc.clone()).unwrap()));
+
+        thunk = r#".a | .b | .c"#.parse().unwrap();
+        let doc: Json = r#"{"a": {"b": {"c": 100}}}"#.parse().unwrap();
+        let refval = r#"[100]"#;
+        assert_eq!(refval, &format!("{:?}", thunk(doc.clone()).unwrap()));
+
+        thunk = r#".a | . | .b"#.parse().unwrap();
+        let doc: Json = r#"{"a": {"b": 100}}"#.parse().unwrap();
+        let refval = r#"[100]"#;
+        assert_eq!(refval, &format!("{:?}", thunk(doc.clone()).unwrap()));
+    }
+
+    #[test]
+    fn test_query_paranthesis() {
+        let mut thunk: Thunk = "2 + . * 15".parse().unwrap();
+
+        let doc: Json = r#"10"#.parse().unwrap();
+        let refval = r#"[152]"#;
+        assert_eq!(refval, &format!("{:?}", thunk(doc.clone()).unwrap()));
+
+        thunk = r#"(2 + .) * 15"#.parse().unwrap();
+        let doc: Json = r#"10"#.parse().unwrap();
+        let refval = r#"[180]"#;
+        assert_eq!(refval, &format!("{:?}", thunk(doc.clone()).unwrap()));
+    }
 }
