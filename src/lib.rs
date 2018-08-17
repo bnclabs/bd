@@ -6,6 +6,7 @@
 #![feature(box_patterns)]
 #![feature(slice_index_methods)]
 #![feature(associated_type_defaults)]
+#![feature(vec_remove_item)]
 
 
 extern crate test;

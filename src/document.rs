@@ -1,7 +1,7 @@
 use std::ops::{Neg, Not, Mul, Div, Rem, Add, Sub};
 use std::ops::{Shr, Shl, BitAnd, BitXor, BitOr};
 use std::convert::{From};
-use std::{result};
+use std::{result, fmt};
 use std::cmp::Ordering;
 
 use json::Json;
@@ -9,7 +9,7 @@ use query;
 
 // TODO: why should document be marked as Sized ?
 pub trait Document :
-    Default + Clone + Sized + From<bool> + From<Json> +
+    fmt::Debug + Default + Clone + Sized + From<bool> + From<Json> +
     Neg<Output=Self> + Not<Output=Self> +
     Mul<Output=Self> + Div<Output=Self> + Rem<Output=Self> +
     Add<Output=Self> + Sub<Output=Self> +
@@ -17,15 +17,21 @@ pub trait Document :
     BitAnd<Output=Self> + BitXor<Output=Self> + BitOr<Output=Self> +
     PartialEq + PartialOrd +
     And<Output=Self> + Or<Output=Self> +
-    Recurse<Output=Vec<Self>> + Slice<Output=Option<Self>> + Comprehension<Output=Vec<Self>> {
+    Recurse<Output=Vec<Self>> + Slice<Output=Option<Self>> {
 
-    type Err: Into<query::Error>;
+    type Err: Into<query::Error> + fmt::Debug;
+
+    fn new_array(Vec<Self>) -> Self;
+
+    fn new_object(Vec<KeyValue<Self>>) -> Self;
 
     fn string(self) -> result::Result<String, Self::Err>;
 
     fn index(self, off: isize) -> result::Result<Self, Self::Err>;
 
     fn get<'a>(self, key: &'a str) -> result::Result<Self, Self::Err>;
+
+    fn get_ref<'a>(&self, key: &'a str) -> result::Result<&Self, Self::Err>;
 
     fn values<'a>(self) -> Option<Box<Iterator<Item=Self>>>;
 }
@@ -52,13 +58,6 @@ pub trait Slice : Sized {
     type Output=Option<Self>;
 
     fn slice(self, start: isize, end: isize) -> Self::Output;
-}
-
-pub trait Comprehension: Sized {
-    type Output=Vec<Self>;
-
-    fn map_comprehend(iter: impl Iterator<Item=(Vec<String>, Vec<Self>)>) -> Self::Output;
-    fn list_comprehend(iter: impl Iterator<Item=Vec<Self>>) -> Self::Output;
 }
 
 
@@ -92,6 +91,7 @@ impl<D> From<String> for KeyValue<D> where D: Document {
 }
 
 impl<D> KeyValue<D> where D: Document {
+
     #[inline]
     pub fn new(key: String, value: D) -> KeyValue<D> {
         KeyValue(key, value)

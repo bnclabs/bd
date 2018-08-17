@@ -5,10 +5,9 @@ use std::ops::{Neg, Not, Mul, Div, Rem, Add, Sub, Shr, Shl};
 use std::ops::{BitAnd, BitXor, BitOr, Index, IndexMut};
 use std::ops::{Range, RangeFrom, RangeTo, RangeToInclusive, RangeInclusive};
 use std::ops::{RangeFull};
-use std::vec;
+use std::{vec};
 
-use document::{Document, KeyValue};
-use document::{And, Or, Recurse, Slice, Comprehension};
+use document::{Document, KeyValue, And, Or, Recurse, Slice};
 use lex::Lex;
 use util;
 
@@ -606,9 +605,7 @@ impl Json {
     }
 
     pub fn upsert_key(&mut self, kv: Property) {
-        let o = self.object_mut().unwrap();
-        let i = search_by_key(&o, kv.key_ref()).unwrap_or_else(|e| e.key_missing_at());
-        o.insert(i, kv);
+        util::upsert_object_key(self.object_mut().unwrap(), kv);
     }
 
     pub fn do_recurse(&self, list: &mut Vec<Json>) {
@@ -709,6 +706,14 @@ impl fmt::Debug for Json {
 impl Document for Json {
     type Err=Error;
 
+    fn new_array(arg: Vec<Json>) -> Json {
+        Json::Array(arg)
+    }
+
+    fn new_object(arg: Vec<KeyValue<Json>>) -> Json {
+        Json::Object(arg)
+    }
+
     fn string(self) -> Result<String> {
         Ok(self.string()?)
     }
@@ -719,6 +724,10 @@ impl Document for Json {
 
     fn get<'a>(self, key: &'a str) -> Result<Json> {
         Ok(self.get(key)?)
+    }
+
+    fn get_ref<'a>(&self, key: &'a str) -> Result<&Json> {
+        Ok(self.get_ref(key)?)
     }
 
     fn values(self) -> Option<Box<Iterator<Item=Json>>> {
@@ -838,7 +847,7 @@ impl Mul for Json {
     type Output=Json;
 
     fn mul(self, rhs: Json) -> Json {
-        use json::Json::{Null,Bool,Integer,Float,Array,Object, String as S};
+        use json::Json::{Null,Integer,Float,Object, String as S};
 
         match (self, rhs) {
             (Integer(l), Integer(r)) => Integer(l*r),
@@ -847,27 +856,15 @@ impl Mul for Json {
             (Float(l), Float(r)) => Float(l*r),
             (Float(l), Integer(r)) => Float(l*(r as f64)),
             (lhs@Float(_), rhs) => rhs.mul(lhs),
-            (Null, _) => Null,
-            (Bool(false), _) => Null,
-            (Bool(true), val) => val.clone(),
             (S(_), Integer(0)) => Null,
-            (S(s), Integer(n)) => S(s.repeat(n as usize)), // TODO: check for n > 0
-            (S(_), _) => Null,
-            (Object(o), Bool(true)) => Object(o.clone()),
+            (S(s), Integer(n)) => S(s.repeat(n as usize)),
             (Object(this), Object(other)) => {
                 let mut obj = Vec::new();
                 obj = mixin_object(obj, this.to_vec());
                 obj = mixin_object(obj, other.to_vec());
                 Json::Object(obj)
             },
-            (Object(_), _) => Null,
-            (Array(a), Integer(n)) => {
-                let mut v = vec![];
-                (0..n).for_each(|_| v.extend_from_slice(&a));
-                Array(v)
-            },
-            (Array(a), Bool(true)) => Array(a.clone()),
-            (Array(_), _) => Null,
+            (_, _) => Null,
         }
     }
 }
@@ -880,13 +877,13 @@ impl Div for Json {
 
         match (self, rhs) {
             (Integer(_), Integer(0)) => Null,
-            (Integer(l), Integer(r)) => Integer(l/r),
-            (Integer(_), Float(f)) if f == 0.0 => Null,
+            (Integer(_), Float(f)) if f == 0_f64 => Null,
+            (Float(_), Integer(0)) => Null,
+            (Float(_), Float(f)) if f == 0_f64 => Null,
+            (Integer(l), Integer(r)) => Float((l as f64)/(r as f64)),
             (Integer(l), Float(r)) => Float((l as f64)/r),
-            (lhs@Integer(_), rhs) => rhs.div(lhs),
             (Float(l), Float(r)) => Float(l/r),
             (Float(l), Integer(r)) => Float(l/(r as f64)),
-            (lhs@Float(_), rhs) => rhs.div(lhs),
             (S(s), S(patt)) => {
                 Json::Array(s.split(&patt).map(|s| S(s.to_string())).collect())
             },
@@ -904,12 +901,12 @@ impl Rem for Json {
         match (self, rhs) {
             (Integer(_), Integer(0)) => Null,
             (Integer(l), Integer(r)) => Integer(l%r),
-            (Integer(_), Float(f)) if f == 0.0 => Null,
+            (Integer(_), Float(f)) if f == 0_f64 => Null,
             (Integer(l), Float(r)) => Float((l as f64)%r),
-            (lhs@Integer(_), rhs) => rhs.rem(lhs),
-            (Float(l), Float(r)) => Float(l%r),
+            (Float(_), Integer(0)) => Null,
             (Float(l), Integer(r)) => Float(l%(r as f64)),
-            (lhs@Float(_), rhs) => rhs.rem(lhs),
+            (Float(_), Float(f)) if f == 0_f64 => Null,
+            (Float(l), Float(r)) => Float(l%r),
             (_, _) => Null,
         }
     }
@@ -953,7 +950,7 @@ impl Sub for Json {
     type Output=Json;
 
     fn sub(self, rhs: Json) -> Json {
-        use json::Json::{Null,Integer,Float};
+        use json::Json::{Null,Integer,Float,Array};
 
         match (self, rhs) {
             (Integer(l), Integer(r)) => Integer(l-r),
@@ -962,6 +959,10 @@ impl Sub for Json {
             (Float(l), Float(r)) => Float(l-r),
             (Float(l), Integer(r)) => Float(l-(r as f64)),
             (lhs@Float(_), rhs) => rhs.sub(lhs),
+            (Array(mut lhs), Array(rhs)) => {
+                rhs.iter().for_each(|x| {lhs.remove_item(x);});
+                Array(lhs)
+            },
             (_, _) => Null,
         }
     }
@@ -1080,82 +1081,23 @@ impl Slice for Json {
     }
 }
 
-impl Comprehension for Json {
-    type Output=Vec<Json>;
-
-    fn list_comprehend(iter: impl Iterator<Item=Vec<Json>>) -> Vec<Json> {
-        let mut out = Vec::new();
-        for mut items in iter {
-            out.append(&mut items)
-        }
-        vec![Json::Array(out)]
-    }
-
-    fn map_comprehend(iter: impl Iterator<Item=(Vec<String>, Vec<Json>)>)
-        -> Vec<Json>
-    {
-        let mut dicts: Vec<Json> = vec![Json::Object(vec![])];
-
-        let insert_dicts = |dicts: &mut Vec<Json>, kv: &Property| {
-            dicts.iter_mut().for_each(|dict| { dict.upsert_key(kv.clone()); });
-        };
-
-        for (keys, vals) in iter {
-            for (i, key) in keys.into_iter().enumerate() {
-                for (j, val) in vals.clone().into_iter().enumerate() {
-                    let kv = Property::new(key.clone(), val);
-                    if i == 0 && j == 0 {
-                        insert_dicts(&mut dicts, &kv);
-                        continue
-                    }
-                    let mut next_dicts = dicts.clone();
-                    insert_dicts(&mut next_dicts, &kv);
-                    dicts.append(&mut next_dicts);
-                }
-            }
-        }
-        dicts
-    }
-}
-
 fn search_by_key(obj: &Vec<Property>, key: &str) -> Result<usize> {
-    use std::cmp::Ordering::{Greater, Equal, Less};
+    use util::search_by_key;
 
-    let mut size = obj.len();
-    if size == 0 {
-        return Err(Error::KeyMissing(0, key.to_string()))
-    }
-
-    let mut base = 0usize;
-    while size > 1 {
-        let half = size / 2;
-        let mid = base + half;
-        // mid is always in [0, size), that means mid is >= 0 and < size.
-        // mid >= 0: by definition
-        // mid < size: mid = size / 2 + size / 4 + size / 8 ...
-        let item: &str = obj[mid].key_ref();
-        base = if item.cmp(key) == Greater { base } else { mid };
-        size -= half;
-    }
-    // base is always in [0, size) because base <= mid.
-    let item: &str = obj[base].key_ref();
-    let cmp = item.cmp(key);
-    if cmp == Equal {
-        Ok(base)
-    } else {
-        Err(Error::KeyMissing(base + (cmp == Less) as usize, key.to_string()))
+    match search_by_key(obj, key) {
+        Ok(off) => Ok(off),
+        Err(off) => Err(Error::KeyMissing(off, key.to_string())),
     }
 }
 
-fn merge_object(mut this: Vec<Property>, other: Vec<Property>)
-    -> Vec<Property>
-{
-    for o in other.into_iter() {
-        let i = search_by_key(&this, o.key_ref())
-                .unwrap_or_else(|e| e.key_missing_at());
-        this.insert(i, o)
+fn merge_object(mut dst: Vec<Property>, src: Vec<Property>) -> Vec<Property> {
+    for o in src.into_iter() {
+        match search_by_key(&dst, o.key_ref()) {
+            Ok(off) => dst[off] = o,
+            Err(err) => dst.insert(err.key_missing_at(), o)
+        }
     }
-    this
+    dst
 }
 
 fn mixin_object(mut this: Vec<Property>, other: Vec<Property>)

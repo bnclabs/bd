@@ -1,15 +1,17 @@
-use std::{result, error, cmp};
+use std::{result, error, cmp, iter};
 use std::fmt::{self};
 use std::str::FromStr;
 
 use nom::{self, {types::CompleteStr as NS}};
 
+use util;
 use json::{self, Json};
 use query_nom::parse_program_nom;
-use document::{Document};
+use document::{Document,KeyValue};
 
 // TODO: Parametrise Thunk over different types of Document.
 // TODO: Better to replace panic with assert!() macro.
+// TODO: Don't use vec![] macro, try to use with_capacity.
 
 type Output<D> = Vec<D>;
 
@@ -90,7 +92,7 @@ pub enum Thunk where {
     IterateValues(bool),
     Iterate(Vec<Thunk>, bool),
     List(Vec<Thunk>, bool),
-    Dict(Vec<(Thunk, Thunk)>, bool),
+    Dict(Vec<(Thunk, Option<Thunk>)>, bool),
     // Operations in decreasing precedance
     Neg(Box<Thunk>),
     Not(Box<Thunk>),
@@ -253,38 +255,65 @@ fn do_iterate<D>(thunks: &mut Vec<Thunk>, opt: bool, doc: D)
     Ok(out)
 }
 
+// TODO: handle opt.
 fn do_list<D>(thunks: &mut Vec<Thunk>, _opt: bool, doc: D)
     -> Result<Output<D>> where D: Document
 {
-    let iter = thunks.iter_mut().filter_map(|thunk| {
-        let res = thunk(doc.clone());
-        if res.is_err() { return None }
-        Some(res.unwrap())
-    });
+    let mut out: Vec<D> = Vec::with_capacity(thunks.len());
 
-    let val = { D::list_comprehend(iter) };
-    Ok(val)
+    for thunk in thunks.iter_mut() {
+        let mut vals: Vec<D> = thunk(doc.clone())?;
+        out.append(&mut vals);
+    }
+    Ok(vec![Document::new_array(out)])
 }
 
-fn do_dict<D>(kv_thunks: &mut Vec<(Thunk, Thunk)>, _opt: bool, doc: D)
+// TODO: handle opt.
+fn do_dict<D>(kv_thunks: &mut Vec<(Thunk, Option<Thunk>)>, _opt: bool, doc: D)
     -> Result<Output<D>> where D: Document
 {
-    let iter = kv_thunks.iter_mut().filter_map(|kv_thunk| {
-        let key_res = kv_thunk.0(doc.clone());
-        if key_res.is_err() { return None }
-
-        let val_res = kv_thunk.1(doc.clone());
-        if val_res.is_err() { return None }
-
-        let keys = key_res.unwrap().into_iter()
-            .filter_map(|val| { val.string().ok() })
-            .collect();
-
-        Some((keys, val_res.unwrap()))
-    });
-
-    let val = D::map_comprehend(iter);
-    Ok(val)
+    let mut dicts: Vec<Vec<KeyValue<D>>> = vec![vec![]];
+    let mut keys: Vec<String> = Vec::with_capacity(kv_thunks.len());
+    for (kthunk, vthunk) in kv_thunks.iter_mut() {
+        keys.clear();
+        for key in kthunk(doc.clone())? {
+            keys.push(key.string().map_err(Into::into)?)
+        }
+        let kvss: Vec<Vec<KeyValue<D>>> = match vthunk {
+            Some(ref mut vthunk) => {
+                vthunk(doc.clone())?.into_iter().map(|val|
+                    keys.clone().into_iter()
+                    .zip(iter::repeat(val).take(keys.len()))
+                    .map(|(k,v)| KeyValue::new(k,v))
+                    .collect()
+                ).collect()
+            },
+            None => {
+                let mut vals = Vec::with_capacity(keys.len());
+                for k in keys.iter() {
+                    vals.push(doc.get_ref(k).map_err(Into::into)?.clone());
+                }
+                vec![
+                    keys.clone().into_iter()
+                    .zip(vals).map(|(k,v)| KeyValue::new(k,v)).collect()
+                ]
+            },
+        };
+        let mut next_dicts: Vec<Vec<KeyValue<D>>> = Vec::new();
+        let n = kvss.len();
+        let z =  kvss.into_iter().zip(iter::repeat(dicts).take(n).into_iter());
+        for (kvs, mut dicts) in z {
+            for dict in dicts.iter_mut() {
+                kvs.clone().into_iter().for_each(
+                    |kv| util::upsert_object_key(dict, kv)
+                );
+            }
+            next_dicts.append(&mut dicts);
+            //println!("loop1 {:?} {:?}", dicts, next_dicts);
+        }
+        dicts = next_dicts
+    }
+    Ok(dicts.into_iter().map(Document::new_object).collect())
 }
 
 fn do_neg<D>(thunk: &mut Thunk, doc: D)
@@ -558,13 +587,16 @@ mod test {
         let out = thunk(doc.clone()).unwrap();
         assert_eq!("[\"hello\"]", &format!("{:?}", out));
 
-        thunk = "[10.2]".parse().unwrap();
+        thunk = r#"[10.2, true, null, "hello"]"#.parse().unwrap();
+        //println!("{:?}", thunk);
         let out = thunk(doc.clone()).unwrap();
-        assert_eq!("[[1.02e1]]", &format!("{:?}", out));
+        assert_eq!(r#"[[1.02e1,true,null,"hello"]]"#, &format!("{:?}", out));
 
-        thunk = "{\"x\": 10.2}".parse().unwrap();
+        thunk = r#"{"x":12, "y":[10,20], "z":{"a":true}}"#.parse().unwrap();
+        //println!("{:?}", thunk);
         let out = thunk(doc.clone()).unwrap();
-        assert_eq!("[{\"x\":1.02e1}]", &format!("{:?}", out));
+        let refval = r#"[{"x":12,"y":[10,20],"z":{"a":true}}]"#;
+        assert_eq!(refval, &format!("{:?}", out));
     }
 
     #[test]
@@ -828,6 +860,267 @@ mod test {
         thunk = r#"(2 + .) * 15"#.parse().unwrap();
         let doc: Json = r#"10"#.parse().unwrap();
         let refval = r#"[180]"#;
+        assert_eq!(refval, &format!("{:?}", thunk(doc.clone()).unwrap()));
+    }
+
+    #[test]
+    fn test_query_collection_list() {
+        let mut thunk: Thunk = r#"[]"#.parse().unwrap();
+
+        let doc: Json = r#"10"#.parse().unwrap();
+        let refval = r#"[[]]"#;
+        assert_eq!(refval, &format!("{:?}", thunk(doc.clone()).unwrap()));
+
+        thunk = r#"[1,2,3]"#.parse().unwrap();
+        let doc: Json = r#"10"#.parse().unwrap();
+        let refval = r#"[[1,2,3]]"#;
+        assert_eq!(refval, &format!("{:?}", thunk(doc.clone()).unwrap()));
+
+        thunk = r#"[foo, .bar, baz]"#.parse().unwrap();
+        let doc: Json = r#"{"foo": 10, "bar":20, "baz":30}"#.parse().unwrap();
+        let refval = r#"[[10,20,30]]"#;
+        assert_eq!(refval, &format!("{:?}", thunk(doc.clone()).unwrap()));
+
+        thunk = r#"[.0, .4, .2]"#.parse().unwrap();
+        let doc: Json = r#"[10,20,30,40,50]"#.parse().unwrap();
+        let refval = r#"[[10,50,30]]"#;
+        assert_eq!(refval, &format!("{:?}", thunk(doc.clone()).unwrap()));
+
+        thunk = r#"[.items.[].name]"#.parse().unwrap();
+        let doc = r#"{"items": [{"name": "x"}, {"name":"y"}]}"#;
+        let doc: Json = doc.parse().unwrap();
+        let refval = r#"[["x","y"]]"#;
+        assert_eq!(refval, &format!("{:?}", thunk(doc.clone()).unwrap()));
+
+        thunk = r#"[.user, .projects.[]]"#.parse().unwrap();
+        let doc = r#"{"user":"stedolan", "projects": ["jq", "wikiflow"]}"#;
+        let doc: Json = doc.parse().unwrap();
+        let refval = r#"[["stedolan","jq","wikiflow"]]"#;
+        assert_eq!(refval, &format!("{:?}", thunk(doc.clone()).unwrap()));
+    }
+
+    #[test]
+    fn test_query_collection_object() {
+        let mut thunk: Thunk = r#"{"a":42,"b":17}"#.parse().unwrap();
+
+        let doc: Json = r#"10"#.parse().unwrap();
+        let refval = r#"[{"a":42,"b":17}]"#;
+        assert_eq!(refval, &format!("{:?}", thunk(doc.clone()).unwrap()));
+
+        thunk = r#"{a:42, b:17} "#.parse().unwrap();
+        let doc: Json = r#"10"#.parse().unwrap();
+        let refval = r#"[{"a":42,"b":17}]"#;
+        assert_eq!(refval, &format!("{:?}", thunk(doc.clone()).unwrap()));
+
+        thunk = r#"{(."a"+"-"+."b"):59}"#.parse().unwrap();
+        let doc: Json = r#"{"a":"firstname","b":"lastname"}"#.parse().unwrap();
+        let refval = r#"[{"firstname-lastname":59}]"#;
+        assert_eq!(refval, &format!("{:?}", thunk(doc.clone()).unwrap()));
+
+        thunk = r#"{foo:.bar}"#.parse().unwrap();
+        let doc: Json = r#"{"bar":10}"#.parse().unwrap();
+        let refval = r#"[{"foo":10}]"#;
+        assert_eq!(refval, &format!("{:?}", thunk(doc.clone()).unwrap()));
+
+        thunk = r#"{user: .user, title: .title}"#.parse().unwrap();
+        let doc = r#"{"user":"prom","title":"testing","age":30,"city":"ax"}"#;
+        let doc: Json = doc.parse().unwrap();
+        let refval = r#"[{"title":"testing","user":"prom"}]"#;
+        assert_eq!(refval, &format!("{:?}", thunk(doc.clone()).unwrap()));
+
+        thunk = r#"{user, title}"#.parse().unwrap();
+        let doc = r#"{"user":"prom","title":"testing","age":30,"city":"ax"}"#;
+        let doc: Json = doc.parse().unwrap();
+        let refval = r#"[{"title":"testing","user":"prom"}]"#;
+        assert_eq!(refval, &format!("{:?}", thunk(doc.clone()).unwrap()));
+
+        thunk = r#"{(ks.[]), title}"#.parse().unwrap();
+        let doc = r#"{"ks":["age","city"],"age":30,"city":"ax","title":null}"#;
+        let doc: Json = doc.parse().unwrap();
+        let refval = r#"[{"age":30,"city":"ax","title":null}]"#;
+        assert_eq!(refval, &format!("{:?}", thunk(doc.clone()).unwrap()));
+
+        thunk = r#"{user, title: .titles.[]}"#.parse().unwrap();
+        let doc = r#"{"user":"sted","titles":["JQ Primer", "More JQ"]}"#;
+        let doc: Json = doc.parse().unwrap();
+        let mut refval = r#"[{"title":"JQ Primer","user":"sted"}, "#.to_string();
+        refval += r#"{"title":"More JQ","user":"sted"}]"#;
+        assert_eq!(&refval, &format!("{:?}", thunk(doc.clone()).unwrap()));
+
+        thunk = r#"{(.user): .titles}"#.parse().unwrap();
+        let doc = r#"{"user":"stedolan","titles":["JQ Primer", "More JQ"]}"#;
+        let doc: Json = doc.parse().unwrap();
+        let refval = r#"[{"stedolan":["JQ Primer","More JQ"]}]"#;
+        assert_eq!(refval, &format!("{:?}", thunk(doc.clone()).unwrap()));
+    }
+
+    #[test]
+    fn test_query_recurse() {
+        let mut thunk: Thunk = r#"..|.a?"#.parse().unwrap();
+
+        let doc: Json = r#"[[{"a":1}, {"a":2}],{"a":3}]"#.parse().unwrap();
+        let refval = r#"[1, 2, 3]"#;
+        assert_eq!(refval, &format!("{:?}", thunk(doc.clone()).unwrap()));
+    }
+
+    #[test]
+    fn test_query_addition() {
+        let mut thunk: Thunk = r#"a+b"#.parse().unwrap();
+
+        let doc: Json = r#"{"a":1,"b":2}"#.parse().unwrap();
+        let refval = r#"[3]"#;
+        assert_eq!(refval, &format!("{:?}", thunk(doc.clone()).unwrap()));
+
+        thunk = r#"a+b"#.parse().unwrap();
+        let doc: Json = r#"{"a":1.2,"b":2.3}"#.parse().unwrap();
+        let refval = r#"[3.5e0]"#;
+        assert_eq!(refval, &format!("{:?}", thunk(doc.clone()).unwrap()));
+
+        thunk = r#"a+b+c"#.parse().unwrap();
+        let doc: Json = r#"{"a":[1,2],"b":[],"c":[3,4]}"#.parse().unwrap();
+        let refval = r#"[[1,2,3,4]]"#;
+        assert_eq!(refval, &format!("{:?}", thunk(doc.clone()).unwrap()));
+
+        thunk = r#"a+b+c"#.parse().unwrap();
+        let doc: Json = r#"{"a":"hello","b":"","c":"world"}"#.parse().unwrap();
+        let refval = r#"["helloworld"]"#;
+        assert_eq!(refval, &format!("{:?}", thunk(doc.clone()).unwrap()));
+
+        thunk = r#"a+b+c"#.parse().unwrap();
+        let doc = r#"{"a":{"x":1},"b":{"x":2},"c":{"y":2}}"#;
+        let doc: Json = doc.parse().unwrap();
+        let refval = r#"[{"x":2,"y":2}]"#;
+        assert_eq!(refval, &format!("{:?}", thunk(doc.clone()).unwrap()));
+    }
+
+    #[test]
+    fn test_query_subraction() {
+        let mut thunk: Thunk = r#"a-b"#.parse().unwrap();
+
+        let doc: Json = r#"{"a":1,"b":2}"#.parse().unwrap();
+        let refval = r#"[-1]"#;
+        assert_eq!(refval, &format!("{:?}", thunk(doc.clone()).unwrap()));
+
+        thunk = r#"a-b"#.parse().unwrap();
+        let doc: Json = r#"{"a":1.3,"b":2.1}"#.parse().unwrap();
+        let refval = r#"[-8e-1]"#;
+        assert_eq!(refval, &format!("{:?}", thunk(doc.clone()).unwrap()));
+
+        thunk = r#"a-b"#.parse().unwrap();
+        let doc: Json = r#"{"a":[1,2],"b":[2]}"#.parse().unwrap();
+        let refval = r#"[[1]]"#;
+        assert_eq!(refval, &format!("{:?}", thunk(doc.clone()).unwrap()));
+    }
+
+    #[test]
+    fn test_query_multiplication() {
+        let mut thunk: Thunk = r#"a*b"#.parse().unwrap();
+
+        let doc: Json = r#"{"a":1,"b":2}"#.parse().unwrap();
+        let refval = r#"[2]"#;
+        assert_eq!(refval, &format!("{:?}", thunk(doc.clone()).unwrap()));
+
+        thunk = r#"a*b"#.parse().unwrap();
+        let doc: Json = r#"{"a":1.2,"b":2}"#.parse().unwrap();
+        let refval = r#"[2.4e0]"#;
+        assert_eq!(refval, &format!("{:?}", thunk(doc.clone()).unwrap()));
+
+        thunk = r#"a*b"#.parse().unwrap();
+        let doc: Json = r#"{"a":5,"b":2.5}"#.parse().unwrap();
+        let refval = r#"[1.25e1]"#;
+        assert_eq!(refval, &format!("{:?}", thunk(doc.clone()).unwrap()));
+
+        thunk = r#"a*b"#.parse().unwrap();
+        let doc: Json = r#"{"a":1.2,"b":2.1}"#.parse().unwrap();
+        let refval = r#"[2.52e0]"#;
+        assert_eq!(refval, &format!("{:?}", thunk(doc.clone()).unwrap()));
+
+        thunk = r#"a*b"#.parse().unwrap();
+        let doc: Json = r#"{"a":"hello","b":0}"#.parse().unwrap();
+        let refval = r#"[null]"#;
+        assert_eq!(refval, &format!("{:?}", thunk(doc.clone()).unwrap()));
+
+        thunk = r#"a*b"#.parse().unwrap();
+        let doc: Json = r#"{"a":"hello","b":2}"#.parse().unwrap();
+        let refval = r#"["hellohello"]"#;
+        assert_eq!(refval, &format!("{:?}", thunk(doc.clone()).unwrap()));
+
+        thunk = r#"a*b"#.parse().unwrap();
+        let doc: Json = r#"{"a":{"x":1},"b":{"y":2}}"#.parse().unwrap();
+        let refval = r#"[{"x":1,"y":2}]"#;
+        assert_eq!(refval, &format!("{:?}", thunk(doc.clone()).unwrap()));
+    }
+
+    #[test]
+    fn test_query_division() {
+        let mut thunk: Thunk = r#"a/b"#.parse().unwrap();
+
+        let doc: Json = r#"{"a":1,"b":2}"#.parse().unwrap();
+        let refval = r#"[5e-1]"#;
+        assert_eq!(refval, &format!("{:?}", thunk(doc.clone()).unwrap()));
+
+        thunk = r#"a/b"#.parse().unwrap();
+        let doc: Json = r#"{"a":1.2,"b":2}"#.parse().unwrap();
+        let refval = r#"[6e-1]"#;
+        assert_eq!(refval, &format!("{:?}", thunk(doc.clone()).unwrap()));
+
+        thunk = r#"a/b"#.parse().unwrap();
+        let doc: Json = r#"{"a":5,"b":2.5}"#.parse().unwrap();
+        let refval = r#"[2e0]"#;
+        assert_eq!(refval, &format!("{:?}", thunk(doc.clone()).unwrap()));
+
+        thunk = r#"a/b"#.parse().unwrap();
+        let doc: Json = r#"{"a":1.2,"b":2.1}"#.parse().unwrap();
+        let refval = r#"[5.714285714285714e-1]"#;
+        assert_eq!(refval, &format!("{:?}", thunk(doc.clone()).unwrap()));
+
+        thunk = r#"a/b"#.parse().unwrap();
+        let doc: Json = r#"{"a":1,"b":0}"#.parse().unwrap();
+        let refval = r#"[null]"#;
+        assert_eq!(refval, &format!("{:?}", thunk(doc.clone()).unwrap()));
+
+        thunk = r#"a/b"#.parse().unwrap();
+        let doc: Json = r#"{"a":1.2,"b":0}"#.parse().unwrap();
+        let refval = r#"[null]"#;
+        assert_eq!(refval, &format!("{:?}", thunk(doc.clone()).unwrap()));
+
+        thunk = r#"a/b"#.parse().unwrap();
+        let doc: Json = r#"{"a":"a,b,c,d","b":","}}"#.parse().unwrap();
+        let refval = r#"[["a","b","c","d"]]"#;
+        assert_eq!(refval, &format!("{:?}", thunk(doc.clone()).unwrap()));
+    }
+
+    #[test]
+    fn test_query_rem() {
+        let mut thunk: Thunk = r#"a%b"#.parse().unwrap();
+
+        let doc: Json = r#"{"a":1,"b":2}"#.parse().unwrap();
+        let refval = r#"[1]"#;
+        assert_eq!(refval, &format!("{:?}", thunk(doc.clone()).unwrap()));
+
+        thunk = r#"a%b"#.parse().unwrap();
+        let doc: Json = r#"{"a":1.2,"b":2}"#.parse().unwrap();
+        let refval = r#"[1.2e0]"#;
+        assert_eq!(refval, &format!("{:?}", thunk(doc.clone()).unwrap()));
+
+        thunk = r#"a%b"#.parse().unwrap();
+        let doc: Json = r#"{"a":5,"b":2.5}"#.parse().unwrap();
+        let refval = r#"[0e0]"#;
+        assert_eq!(refval, &format!("{:?}", thunk(doc.clone()).unwrap()));
+
+        thunk = r#"a%b"#.parse().unwrap();
+        let doc: Json = r#"{"a":1.2,"b":2.1}"#.parse().unwrap();
+        let refval = r#"[1.2e0]"#;
+        assert_eq!(refval, &format!("{:?}", thunk(doc.clone()).unwrap()));
+
+        thunk = r#"a%b"#.parse().unwrap();
+        let doc: Json = r#"{"a":1,"b":0}"#.parse().unwrap();
+        let refval = r#"[null]"#;
+        assert_eq!(refval, &format!("{:?}", thunk(doc.clone()).unwrap()));
+
+        thunk = r#"a%b"#.parse().unwrap();
+        let doc: Json = r#"{"a":1.2,"b":0}"#.parse().unwrap();
+        let refval = r#"[null]"#;
         assert_eq!(refval, &format!("{:?}", thunk(doc.clone()).unwrap()));
     }
 }

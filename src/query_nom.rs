@@ -53,6 +53,7 @@ fn nom_json_array(text: NS) -> nom::IResult<NS, Json> {
         }
     }
 }
+#[allow(dead_code)] // TODO: Can be removed.
 fn nom_json_object(text: NS) -> nom::IResult<NS, Json> {
     check_next_byte(text, b'{')?;
     let mut lex = Lex::new(0, 1, 1);
@@ -365,7 +366,13 @@ named!(nom_key(NS) -> (Option<String>, Option<isize>),
         nom_identifier => { |s: NS| (Some((&s).to_string()), None) } |
         nom_isize => { |i: isize| (None, Some(i)) } |
         nom_json_string => { |s: Json|
-            match s { Json::String(s) => (Some(s), None), _ => unreachable!() }
+            match s {
+                Json::String(s) => {
+                    let off = s.parse().map(|x| Some(x)).unwrap_or(None);
+                    (Some(s), off)
+                },
+                _ => unreachable!(),
+            }
         }
     )
 );
@@ -501,15 +508,24 @@ named!(nom_primary_collection1(NS) -> (Vec<Thunk>, Option<NS>),
        (thunks, opt)
     )
 );
-named!(nom_collection2_item(NS) -> (Thunk, Thunk),
-    do_parse!(
-        key: nom_expr >>
-             nom_colon >>
-        val: nom_expr >>
-        (key,val)
+named!(nom_object_key(NS) -> Thunk,
+    alt!(
+        nom_identifier => {
+            |s: NS| Thunk::Literal(Json::String((&s).to_string()), false)
+        } |
+        nom_json_string => { |s| Thunk::Literal(s, false) } |
+        nom_primary_paran_expr
     )
 );
-named!(nom_primary_collection2(NS) -> (Vec<(Thunk, Thunk)>, Option<NS>),
+named!(nom_collection2_item(NS) -> (Thunk, Option<Thunk>),
+    do_parse!(
+        key: nom_object_key  >>
+             opt!(nom_colon) >>
+        val: opt!(nom_expr)  >>
+        (key, val)
+    )
+);
+named!(nom_primary_collection2(NS) -> (Vec<(Thunk, Option<Thunk>)>, Option<NS>),
     do_parse!(
         items: delimited!(
                     nom_open_brace,
@@ -551,10 +567,10 @@ named!(nom_primary_literal(NS) -> (Thunk, Option<NS>),
                 nom_true  => { |_| Thunk::Literal(Json::Bool(true), false) } |
                 nom_false => { |_| Thunk::Literal(Json::Bool(false), false) } |
                 nom_number => { number_literal } |
-                nom_json_string => { |s| Thunk::Literal(s, false) } |
+                nom_json_string => { |s| Thunk::Literal(s, false) }
                 // TODO: This is redundant in place of collection-list.
                 // nom_json_array => { |a| Thunk::Literal(a, false) } |
-                nom_json_object => { |o| Thunk::Literal(o, false) }
+                // nom_json_object => { |o| Thunk::Literal(o, false) }
                ) >>
           opt: nom_opt >>
         (thunk, opt)
@@ -596,12 +612,13 @@ named!(nom_primary_expr(NS) -> Thunk,
         nom_primary_slice6 => { slice_to_thunk } |
         nom_primary_full_iterate => { full_iterate_to_thunk } |
         nom_primary_iterate => { iterate_to_thunk } |
-        nom_primary_literal => { literal_to_thunk } | // should come before identifier
         nom_primary_index_short => { index_short_to_thunk } |
-        nom_primary_identifier_opt => { identifier_to_literal } |
         nom_primary_builtins => { builtin_to_thunk } |
         nom_primary_collection1 => { collection1_to_thunk } |
         nom_primary_collection2 => { collection2_to_thunk } |
+        // nom_primary_literal should come before identifier
+        nom_primary_literal => { literal_to_thunk } |
+        nom_primary_identifier_opt => { identifier_to_literal } |
         nom_primary_unarynot_expr => { |thunk| Thunk::Not(Box::new(thunk)) } |
         nom_primary_unaryneg_expr => { |thunk| Thunk::Neg(Box::new(thunk)) } |
         nom_primary_paran_expr |
@@ -627,12 +644,16 @@ named!(nom_program(NS) -> Thunk,
 
 
 fn identifier_to_literal((s, opt): (NS, Option<NS>)) -> Thunk {
-    Thunk::IndexShortcut(Some((&s).to_string()), None, opt.map_or(false, |_| true))
+    let off = s.parse().map(|x| Some(x)).unwrap_or(None);
+    let opt = opt.map_or(false, |_| true);
+    Thunk::IndexShortcut(Some((&s).to_string()), off, opt)
 }
 
 fn literal_to_thunk((thunk, opt): (Thunk, Option<NS>)) -> Thunk {
     match thunk {
-        Thunk::Literal(val, _) => Thunk::Literal(val, opt.map_or(false, |_| true)),
+        Thunk::Literal(val, _) => {
+            Thunk::Literal(val, opt.map_or(false, |_| true))
+        },
         _ => unreachable!(),
     }
 }
@@ -694,7 +715,9 @@ fn collection1_to_thunk((thunks, opt): (Vec<Thunk>, Option<NS>)) -> Thunk {
     Thunk::List(thunks, opt.map_or(false, |_| true))
 }
 
-fn collection2_to_thunk((items, opt): (Vec<(Thunk,Thunk)>, Option<NS>)) -> Thunk {
+fn collection2_to_thunk((items, opt): (Vec<(Thunk,Option<Thunk>)>, Option<NS>))
+    -> Thunk
+{
     Thunk::Dict(items, opt.map_or(false, |_| true))
 }
 
