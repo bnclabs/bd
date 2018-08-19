@@ -639,6 +639,36 @@ impl From<bool> for Json {
     }
 }
 
+impl From<i128> for Json {
+    fn from(val: i128) -> Json {
+        Json::Integer(val)
+    }
+}
+
+impl From<f64> for Json {
+    fn from(val: f64) -> Json {
+        Json::Float(val)
+    }
+}
+
+impl From<String> for Json {
+    fn from(val: String) -> Json {
+        Json::String(val)
+    }
+}
+
+impl From<Vec<Json>> for Json {
+    fn from(val: Vec<Json>) -> Json {
+        Json::Array(val)
+    }
+}
+
+impl From<Vec<KeyValue<Json>>> for Json {
+    fn from(val: Vec<KeyValue<Json>>) -> Json {
+        Json::Object(val)
+    }
+}
+
 impl From<Json> for bool {
     fn from(val: Json) -> bool {
         match val { Json::Null | Json::Bool(false) => false, _ => true }
@@ -706,14 +736,6 @@ impl fmt::Debug for Json {
 impl Document for Json {
     type Err=Error;
 
-    fn new_array(arg: Vec<Json>) -> Json {
-        Json::Array(arg)
-    }
-
-    fn new_object(arg: Vec<KeyValue<Json>>) -> Json {
-        Json::Object(arg)
-    }
-
     fn string(self) -> Result<String> {
         Ok(self.string()?)
     }
@@ -740,6 +762,26 @@ impl Document for Json {
                 Some(Box::new(iter))
             },
             _ => None
+        }
+    }
+
+    fn len(self) -> Result<Json> {
+        match self {
+            Json::String(s) => Ok(Json::Integer(s.len() as i128)),
+            Json::Array(a) => Ok(Json::Integer(a.len() as i128)),
+            Json::Object(o) => Ok(Json::Integer(o.len() as i128)),
+            Json::Null => Ok(Json::Integer(0)),
+            _ => Err(Error::NotMyType("cannot find length".to_string())),
+        }
+    }
+
+    fn chars(self) -> Result<Json> {
+        match self {
+            Json::String(s) => {
+                let cs = s.chars().map(|c| Json::Integer(c as i128)).collect();
+                Ok(Json::Array(cs))
+            },
+            _ => Err(Error::NotMyType("cannot convert to chars".to_string())),
         }
     }
 }

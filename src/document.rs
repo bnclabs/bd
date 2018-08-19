@@ -9,7 +9,10 @@ use query;
 
 // TODO: why should document be marked as Sized ?
 pub trait Document :
-    fmt::Debug + Default + Clone + Sized + From<bool> + From<Json> +
+    From<bool> + From<i128> + From<f64> + From<String> +
+    From<Vec<Self>> + From<Vec<KeyValue<Self>>> +
+    // TODO: should we remove From<Json>
+    fmt::Debug + Default + Clone + Sized + From<Json> +
     Neg<Output=Self> + Not<Output=Self> +
     Mul<Output=Self> + Div<Output=Self> + Rem<Output=Self> +
     Add<Output=Self> + Sub<Output=Self> +
@@ -21,10 +24,6 @@ pub trait Document :
 
     type Err: Into<query::Error> + fmt::Debug;
 
-    fn new_array(Vec<Self>) -> Self;
-
-    fn new_object(Vec<KeyValue<Self>>) -> Self;
-
     fn string(self) -> result::Result<String, Self::Err>;
 
     fn index(self, off: isize) -> result::Result<Self, Self::Err>;
@@ -34,6 +33,10 @@ pub trait Document :
     fn get_ref<'a>(&self, key: &'a str) -> result::Result<&Self, Self::Err>;
 
     fn values<'a>(self) -> Option<Box<Iterator<Item=Self>>>;
+
+    fn len(self) -> Result<Self, Self::Err>;
+
+    fn chars(self) -> Result<Self, Self::Err>;
 }
 
 pub trait And<Rhs=Self> {

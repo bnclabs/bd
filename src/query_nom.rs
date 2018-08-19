@@ -644,9 +644,7 @@ named!(nom_program(NS) -> Thunk,
 
 
 fn identifier_to_literal((s, opt): (NS, Option<NS>)) -> Thunk {
-    let off = s.parse().map(|x| Some(x)).unwrap_or(None);
-    let opt = opt.map_or(false, |_| true);
-    Thunk::IndexShortcut(Some((&s).to_string()), off, opt)
+    Thunk::Identifier((&s).to_string(), opt.map_or(false, |_| true))
 }
 
 fn literal_to_thunk((thunk, opt): (Thunk, Option<NS>)) -> Thunk {
