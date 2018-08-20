@@ -1,6 +1,7 @@
 use std::{result, error, cmp, iter};
 use std::fmt::{self};
 use std::str::FromStr;
+use std::ops::{IndexMut};
 use std::collections::HashMap;
 
 use nom::{self, {types::CompleteStr as NS}};
@@ -602,6 +603,22 @@ fn builtin_keys<D>(args: &mut Vec<Thunk>, doc: D, _c: &mut Context<D>)
     Ok(vec![doc.keys().map_err(Into::into)?])
 }
 
+fn builtin_has<D>(args: &mut Vec<Thunk>, doc: D, c: &mut Context<D>)
+    -> Result<Output<D>> where D: Document
+{
+    assert_args_len(&args, 1)?;
+    let item = args.index_mut(0)(doc.clone(), c)?.remove(0);
+    Ok(vec![doc.has(&item).map_err(Into::into)?])
+}
+
+fn builtin_indoc<D>(args: &mut Vec<Thunk>, item: D, c: &mut Context<D>)
+    -> Result<Output<D>> where D: Document
+{
+    assert_args_len(&args, 1)?;
+    let doc = args.index_mut(0)(item.clone(), c)?.remove(0);
+    Ok(vec![doc.has(&item).map_err(Into::into)?])
+}
+
 
 fn assert_args_len(args: &Vec<Thunk>, n: usize) -> Result<()> {
     if args.len() != n {
@@ -644,6 +661,8 @@ impl<D> Context<D> where D: Document {
         c.set_name("length", builtin_length);
         c.set_name("chars", builtin_chars);
         c.set_name("keys", builtin_keys);
+        c.set_name("has", builtin_has);
+        c.set_name("in", builtin_indoc);
         c
     }
 
@@ -787,7 +806,7 @@ mod test {
         let doc: Json = r#"{"notfoo": 10}"#.parse().unwrap();
         let err = json::Error::KeyMissing(0, "foo".to_string());
         assert_eq!(
-            Err(Error::Op(Some(err), "json op error".to_string())),
+            Err(Error::Op(Some(err), "json op".to_string())),
             thunk(doc.clone(), &mut c)
         );
 
@@ -1439,5 +1458,52 @@ mod test {
         let refval = r#"[[0,1,2]]"#;
         let out = thunk(doc.clone(), &mut c).unwrap();
         assert_eq!(refval, &format!("{:?}", out));
+    }
+
+    #[test]
+    fn test_query_builtin_has() {
+        let mut c = Context::new();
+
+        let mut thunk: Thunk = r#"has("foo")"#.parse().unwrap();
+        let doc: Json = r#"{"foo": 1, "abcd": 2, "Foo": 3}"#.parse().unwrap();
+        let refval = r#"[true]"#;
+        let out = thunk(doc.clone(), &mut c).unwrap();
+        assert_eq!(refval, &format!("{:?}", out));
+
+        thunk = r#"has("foo")"#.parse().unwrap();
+        let doc: Json = r#"["foo", 1, "abcd", 2]"#.parse().unwrap();
+        let refval = r#"[true]"#;
+        let out = thunk(doc.clone(), &mut c).unwrap();
+        assert_eq!(refval, &format!("{:?}", out));
+
+        thunk = r#"has(1)"#.parse().unwrap();
+        let doc: Json = r#"[1, 2]"#.parse().unwrap();
+        let refval = r#"[true]"#;
+        let out = thunk(doc.clone(), &mut c).unwrap();
+        assert_eq!(refval, &format!("{:?}", out));
+    }
+
+    #[test]
+    fn test_query_builtin_in() {
+        let mut c = Context::new();
+
+        let mut thunk: Thunk = r#".[] | in({"foo": 42})"#.parse().unwrap();
+        let doc: Json = r#"["foo", "bar"]"#.parse().unwrap();
+        let refval = r#"[true, false]"#;
+        let out = thunk(doc.clone(), &mut c).unwrap();
+        assert_eq!(refval, &format!("{:?}", out));
+
+        thunk = r#"[.[] | in([1,0])]"#.parse().unwrap();
+        let doc: Json = r#"[2, 0]"#.parse().unwrap();
+        let refval = r#"[[false,true]]"#;
+        let out = thunk(doc.clone(), &mut c).unwrap();
+        assert_eq!(refval, &format!("{:?}", out));
+
+        // TODO: enable this test case after implementing map.
+        //thunk = r#"map(in([0,1]))"#.parse().unwrap();
+        //let doc: Json = r#"[2, 0]"#.parse().unwrap();
+        //let refval = r#"[false,true]"#;
+        //let out = thunk(doc.clone(), &mut c).unwrap();
+        //assert_eq!(refval, &format!("{:?}", out));
     }
 }

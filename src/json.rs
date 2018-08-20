@@ -840,6 +840,19 @@ impl Document for Json {
             }
         }
     }
+
+    fn has(self, item: &Json) -> Result<Json> {
+        match (&self, item) {
+            (Json::Array(a), _) => Ok(Json::Bool(a.contains(item))),
+            (Json::Object(o), Json::String(s)) => {
+                Ok(Json::Bool(o.iter().any(|kv| kv == s)))
+            },
+            _ => {
+                let err = format!("not a container {}", self.variant());
+                Err(Error::NotMyType(err))
+            }
+        }
+    }
 }
 
 impl Index<usize> for Json {

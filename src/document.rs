@@ -39,6 +39,8 @@ pub trait Document :
     fn chars(self) -> Result<Self, Self::Err>;
 
     fn keys(self) -> Result<Self, Self::Err>;
+
+    fn has(self, &Self) -> Result<Self, Self::Err>;
 }
 
 pub trait And<Rhs=Self> {
@@ -77,9 +79,27 @@ impl<D> PartialEq for KeyValue<D> where D: Document {
     }
 }
 
+impl<D> PartialEq<str> for KeyValue<D> where D: Document {
+    fn eq(&self, other: &str) -> bool {
+        self.0.eq(other) // compare only the key.
+    }
+}
+
+impl<D> PartialEq<String> for KeyValue<D> where D: Document {
+    fn eq(&self, other: &String) -> bool {
+        self.0.eq(other) // compare only the key.
+    }
+}
+
 impl<D> PartialOrd for KeyValue<D> where D: Document {
     fn partial_cmp(&self, other: &KeyValue<D>) -> Option<Ordering> {
         Some(self.0.cmp(&other.0)) // compare only the key.
+    }
+}
+
+impl<D> PartialOrd<String> for KeyValue<D> where D: Document {
+    fn partial_cmp(&self, other: &String) -> Option<Ordering> {
+        Some(self.0.cmp(other)) // compare only the key.
     }
 }
 
