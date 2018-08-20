@@ -40,7 +40,7 @@ impl fmt::Display for Error {
             Parse(s) => write!(f, "{}", s),
             ParseFloat(err, s) => write!(f, "{}, {}", err, s),
             ParseInt(err, s) => write!(f, "{}, {}", err, s),
-            NotMyType(s) => write!(f, "not expected type {}", s),
+            NotMyType(s) => write!(f, "{}", s),
             KeyMissing(_, key) => write!(f, "missing key {}", key),
             IndexUnbound(s,e) => write!(f, "index out of bound {}..{}", s, e),
         }
@@ -485,6 +485,18 @@ pub enum Json {
 }
 
 impl Json {
+    pub fn variant(&self) -> String {
+        match self {
+            Json::Null => "null".to_string(),
+            Json::Bool(_) => "bool".to_string(),
+            Json::Integer(_) => "integer".to_string(),
+            Json::Float(_) => "float".to_string(),
+            Json::String(_) => "string".to_string(),
+            Json::Array(_) => "array".to_string(),
+            Json::Object(_) => "object".to_string(),
+        }
+    }
+
     pub fn is_array(&self) -> bool {
         match self { Json::Array(_) => true, _ => false }
     }
@@ -496,28 +508,40 @@ impl Json {
     pub fn array_ref(&self) -> Result<&Vec<Json>> {
         match self {
             Json::Array(a) => Ok(a),
-            _ => Err(Error::NotMyType("json is not array".to_string())),
+            _ => {
+                let err = format!("expected array, found {}", self.variant());
+                Err(Error::NotMyType(err))
+            },
         }
     }
 
     pub fn array_mut(&mut self) -> Result<&mut Vec<Json>> {
         match self {
             Json::Array(a) => Ok(a),
-            _ => Err(Error::NotMyType("json is not array".to_string()))
+            _ => {
+                let err = format!("expected array, found {}", self.variant());
+                Err(Error::NotMyType(err))
+            },
         }
     }
 
     pub fn object_ref(&self) -> Result<&Vec<Property>> {
         match self {
             Json::Object(o) => Ok(o),
-            _ => Err(Error::NotMyType("json is not object".to_string()))
+            _ => {
+                let err = format!("expected array, found {}", self.variant());
+                Err(Error::NotMyType(err))
+            },
         }
     }
 
     pub fn object_mut(&mut self) -> Result<&mut Vec<Property>> {
         match self {
             Json::Object(o) => Ok(o),
-            _ => Err(Error::NotMyType("json is not object".to_string()))
+            _ => {
+                let err = format!("expected object, found {}", self.variant());
+                Err(Error::NotMyType(err))
+            },
         }
     }
 
@@ -545,7 +569,10 @@ impl Json {
         use self::Json::{String as S};
         match self {
             S(s) => Ok(s),
-            _ => Err(Error::NotMyType("not a string".to_string())),
+            _ => {
+                let err = format!("expected string, found {}", self.variant());
+                Err(Error::NotMyType(err))
+            },
         }
     }
 
@@ -559,7 +586,10 @@ impl Json {
                     Err(Error::IndexUnbound(off, off))
                 }
             },
-            _ => Err(Error::NotMyType("json is not array".to_string())),
+            _ => {
+                let err = format!("expected array, found {}", self.variant());
+                Err(Error::NotMyType(err))
+            },
         }
     }
 
@@ -588,7 +618,10 @@ impl Json {
                 let off = search_by_key(&obj, key)?;
                 Ok(obj.remove(off).value())
             },
-            _ => Err(Error::NotMyType("json is not object".to_string()))
+            _ => {
+                let err = format!("expected object, found {}", self.variant());
+                Err(Error::NotMyType(err))
+            },
         }
     }
 
@@ -771,7 +804,10 @@ impl Document for Json {
             Json::Array(a) => Ok(Json::Integer(a.len() as i128)),
             Json::Object(o) => Ok(Json::Integer(o.len() as i128)),
             Json::Null => Ok(Json::Integer(0)),
-            _ => Err(Error::NotMyType("cannot find length".to_string())),
+            _ => {
+                let err = format!("cannot find len for {}", self.variant());
+                Err(Error::NotMyType(err))
+            },
         }
     }
 
@@ -781,7 +817,27 @@ impl Document for Json {
                 let cs = s.chars().map(|c| Json::Integer(c as i128)).collect();
                 Ok(Json::Array(cs))
             },
-            _ => Err(Error::NotMyType("cannot convert to chars".to_string())),
+            _ => {
+                let err = format!("cannot convert to chars for {}", self.variant());
+                Err(Error::NotMyType(err))
+            },
+        }
+    }
+
+    fn keys(self) -> Result<Json> {
+        match self {
+            Json::Object(o) => {
+                let a = o.into_iter().map(|x| Json::String(x.key())).collect();
+                Ok(Json::Array(a))
+            },
+            Json::Array(a) => {
+                let a = (0..a.len()).map(|x| Json::Integer(x as i128)).collect();
+                Ok(Json::Array(a))
+            },
+            _ => {
+                let err = format!("cannot take keys from {}", self.variant());
+                Err(Error::NotMyType(err))
+            }
         }
     }
 }

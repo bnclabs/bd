@@ -37,6 +37,8 @@ pub trait Document :
     fn len(self) -> Result<Self, Self::Err>;
 
     fn chars(self) -> Result<Self, Self::Err>;
+
+    fn keys(self) -> Result<Self, Self::Err>;
 }
 
 pub trait And<Rhs=Self> {

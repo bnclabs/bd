@@ -35,9 +35,9 @@ impl fmt::Display for Error {
 
         match self {
             Parse(s) => write!(f, "{}", s),
-            ParseJson(err) => write!(f, "{}", err),
-            Op(Some(err), s) => write!(f, "{} due to {}", s, err),
-            Op(None, s) => write!(f, "{}", s),
+            ParseJson(err) => write!(f, "parsing json, {}", err),
+            Op(Some(err), s) => write!(f, "{} error, {}", s, err),
+            Op(None, s) => write!(f, "op error, {}", s),
             InvalidArg(s) => write!(f, "{}", s),
             InvalidFunction(s) => write!(f, "{}", s),
         }
@@ -58,7 +58,7 @@ impl From<json::Error> for Error {
                 Error::ParseJson(e)
             },
             e@NotMyType(_) | e@KeyMissing(_,_) | e@IndexUnbound(_, _) => {
-                Error::Op(Some(e), "json op error".to_string())
+                Error::Op(Some(e), "json op".to_string())
             },
         }
     }
@@ -580,6 +580,7 @@ fn do_pipe<D>(ltk: &mut Thunk, rtk: &mut Thunk, doc: D, c: &mut Context<D>)
     Ok(outs)
 }
 
+
 fn builtin_length<D>(args: &mut Vec<Thunk>, doc: D, _c: &mut Context<D>)
     -> Result<Output<D>> where D: Document
 {
@@ -593,6 +594,14 @@ fn builtin_chars<D>(args: &mut Vec<Thunk>, doc: D, _c: &mut Context<D>)
     assert_args_len(&args, 0)?;
     Ok(vec![doc.chars().map_err(Into::into)?])
 }
+
+fn builtin_keys<D>(args: &mut Vec<Thunk>, doc: D, _c: &mut Context<D>)
+    -> Result<Output<D>> where D: Document
+{
+    assert_args_len(&args, 0)?;
+    Ok(vec![doc.keys().map_err(Into::into)?])
+}
+
 
 fn assert_args_len(args: &Vec<Thunk>, n: usize) -> Result<()> {
     if args.len() != n {
@@ -634,6 +643,7 @@ impl<D> Context<D> where D: Document {
         let mut c = Context{namespace};
         c.set_name("length", builtin_length);
         c.set_name("chars", builtin_chars);
+        c.set_name("keys", builtin_keys);
         c
     }
 
@@ -1393,6 +1403,40 @@ mod test {
         thunk = r#".[] | length"#.parse().unwrap();
         let doc: Json = r#"[[1,2], "string", {"a":2}, null]"#.parse().unwrap();
         let refval = r#"[2, 6, 1, 0]"#;
+        let out = thunk(doc.clone(), &mut c).unwrap();
+        assert_eq!(refval, &format!("{:?}", out));
+
+        thunk = r#"length"#.parse().unwrap();
+        let doc: Json = r#""汉语""#.parse().unwrap();
+        let refval = r#"[6]"#;
+        let out = thunk(doc.clone(), &mut c).unwrap();
+        assert_eq!(refval, &format!("{:?}", out));
+    }
+
+    #[test]
+    fn test_query_builtin_chars() {
+        let mut c = Context::new();
+
+        let mut thunk: Thunk = r#". | chars | length"#.parse().unwrap();
+        let doc: Json = r#""汉语""#.parse().unwrap();
+        let refval = r#"[2]"#;
+        let out = thunk(doc.clone(), &mut c).unwrap();
+        assert_eq!(refval, &format!("{:?}", out));
+    }
+
+    #[test]
+    fn test_query_builtin_keys() {
+        let mut c = Context::new();
+
+        let mut thunk: Thunk = r#". | keys"#.parse().unwrap();
+        let doc: Json = r#"{"abc": 1, "abcd": 2, "Foo": 3}"#.parse().unwrap();
+        let refval = r#"[["Foo","abc","abcd"]]"#;
+        let out = thunk(doc.clone(), &mut c).unwrap();
+        assert_eq!(refval, &format!("{:?}", out));
+
+        let mut thunk: Thunk = r#". | keys"#.parse().unwrap();
+        let doc: Json = r#"[10,20,30]"#.parse().unwrap();
+        let refval = r#"[[0,1,2]]"#;
         let out = thunk(doc.clone(), &mut c).unwrap();
         assert_eq!(refval, &format!("{:?}", out));
     }
