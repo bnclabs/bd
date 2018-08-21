@@ -7,7 +7,7 @@ use std::ops::{Range, RangeFrom, RangeTo, RangeToInclusive, RangeInclusive};
 use std::ops::{RangeFull};
 use std::{vec};
 
-use document::{Document, KeyValue, And, Or, Recurse, Slice};
+use document::{self, Document, Doctype, And, Or, Recurse, Slice};
 use lex::Lex;
 use util;
 
@@ -470,7 +470,9 @@ fn check_eof(text: &str, lex: &mut Lex) -> Result<()> {
 }
 
 
-type Property = KeyValue<Json>;
+type Property = document::Property<Json>;
+
+type ArrayItem = document::ArrayItem<Json>;
 
 
 #[derive(Clone,PartialEq,PartialOrd)]
@@ -495,14 +497,6 @@ impl Json {
             Json::Array(_) => "array".to_string(),
             Json::Object(_) => "object".to_string(),
         }
-    }
-
-    pub fn is_array(&self) -> bool {
-        match self { Json::Array(_) => true, _ => false }
-    }
-
-    pub fn is_object(&self) -> bool {
-        match self { Json::Object(_) => true, _ => false }
     }
 
     pub fn array_ref(&self) -> Result<&Vec<Json>> {
@@ -565,15 +559,8 @@ impl Json {
         write!(w, "\"")
     }
 
-    fn string(self) -> Result<String> {
-        use self::Json::{String as S};
-        match self {
-            S(s) => Ok(s),
-            _ => {
-                let err = format!("expected string, found {}", self.variant());
-                Err(Error::NotMyType(err))
-            },
-        }
+    fn string(self) -> Option<String> {
+        match self { Json::String(s) => Some(s), _ => None }
     }
 
     fn index(self, off: isize) -> Result<Json> {
@@ -638,7 +625,7 @@ impl Json {
     }
 
     pub fn upsert_key(&mut self, kv: Property) {
-        util::upsert_object_key(self.object_mut().unwrap(), kv);
+        document::upsert_object_key(self.object_mut().unwrap(), kv);
     }
 
     pub fn do_recurse(&self, list: &mut Vec<Json>) {
@@ -696,9 +683,15 @@ impl From<Vec<Json>> for Json {
     }
 }
 
-impl From<Vec<KeyValue<Json>>> for Json {
-    fn from(val: Vec<KeyValue<Json>>) -> Json {
+impl From<Vec<Property>> for Json {
+    fn from(val: Vec<Property>) -> Json {
         Json::Object(val)
+    }
+}
+
+impl From<Vec<ArrayItem>> for Json {
+    fn from(val: Vec<ArrayItem>) -> Json {
+        Json::Array(val.into_iter().map(|item| item.value()).collect())
     }
 }
 
@@ -769,8 +762,24 @@ impl fmt::Debug for Json {
 impl Document for Json {
     type Err=Error;
 
-    fn string(self) -> Result<String> {
-        Ok(self.string()?)
+    fn doctype(&self) -> Doctype {
+        match self {
+            Json::Null => Doctype::Null,
+            Json::Bool(_) => Doctype::Bool,
+            Json::Integer(_) => Doctype::Integer,
+            Json::Float(_) => Doctype::Float,
+            Json::String(_) => Doctype::String,
+            Json::Array(_) => Doctype::Array,
+            Json::Object(_) => Doctype::Object,
+        }
+    }
+
+    fn null() -> Json {
+        Json::Null
+    }
+
+    fn string(self) -> Option<String> {
+        self.string()
     }
 
     fn index(self, off: isize) -> Result<Json> {
@@ -845,7 +854,8 @@ impl Document for Json {
         match (&self, item) {
             (Json::Array(a), _) => Ok(Json::Bool(a.contains(item))),
             (Json::Object(o), Json::String(s)) => {
-                Ok(Json::Bool(o.iter().any(|kv| kv == s)))
+                let item = Property::new(s.clone(), Json::Null);
+                Ok(Json::Bool(o.iter().any(|kv| kv == &item)))
             },
             _ => {
                 let err = format!("not a container {}", self.variant());
@@ -1193,9 +1203,7 @@ impl Slice for Json {
 }
 
 fn search_by_key(obj: &Vec<Property>, key: &str) -> Result<usize> {
-    use util::search_by_key;
-
-    match search_by_key(obj, key) {
+    match document::search_by_key(obj, key) {
         Ok(off) => Ok(off),
         Err(off) => Err(Error::KeyMissing(off, key.to_string())),
     }

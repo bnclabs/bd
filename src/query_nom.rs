@@ -2,7 +2,7 @@ use nom::{self, {types::CompleteStr as NS}, IResult};
 
 use lex::Lex;
 use json::{self, Json};
-use query::Thunk;
+use query::{Thunk};
 
 named!(nom_dot(NS) -> NS, ws!(tag!(".")));
 named!(nom_dotdot(NS) -> NS, ws!(tag!("..")));
@@ -29,43 +29,43 @@ named!(nom_isize(NS) -> isize,
 named!(nom_number(NS) -> NS,
     ws!(re_find!(r#"^[-+]?[0-9]+\.?[0-9]*([eE][-+]?[0-9]+)?"#))
 );
-fn nom_json_string(text: NS) -> nom::IResult<NS, Json> {
+fn nom_json_string(text: NS) -> nom::IResult<NS, String> {
     check_next_byte(text, b'"')?;
     let mut lex = Lex::new(0, 1, 1);
     match json::parse_string(&text, &mut lex) {
-        Ok(s) => Ok((NS(&text[lex.off..]), s)),
+        Ok(Json::String(s)) => Ok((NS(&text[lex.off..]), s)),
         _ => {
             let kind = nom::ErrorKind::Custom(lex.off as u32);
             return Err(nom::Err::Error(nom::Context::Code(text, kind)));
         }
     }
 }
-#[allow(dead_code)] // TODO: Can be removed.
-fn nom_json_array(text: NS) -> nom::IResult<NS, Json> {
-    check_next_byte(text, b'[')?;
-    //println!("array {}", &text);
-    let mut lex = Lex::new(0, 1, 1);
-    match json::parse_array(&text, &mut lex) {
-        Ok(a) => Ok((NS(&text[lex.off..]), a)),
-        _ => {
-            let kind = nom::ErrorKind::Custom(lex.off as u32);
-            return Err(nom::Err::Error(nom::Context::Code(text, kind)));
-        }
-    }
-}
-#[allow(dead_code)] // TODO: Can be removed.
-fn nom_json_object(text: NS) -> nom::IResult<NS, Json> {
-    check_next_byte(text, b'{')?;
-    let mut lex = Lex::new(0, 1, 1);
-    match json::parse_object(&text, &mut lex) {
-        Ok(o) => Ok((NS(&text[lex.off..]), o)),
-        _ => {
-            let kind = nom::ErrorKind::Custom(lex.off as u32);
-            return Err(nom::Err::Error(nom::Context::Code(text, kind)));
-        }
-    }
-}
-
+//#[allow(dead_code)] // TODO: Can be removed.
+//fn nom_json_array(text: NS) -> nom::IResult<NS, query::Scalar> {
+//    check_next_byte(text, b'[')?;
+//    //println!("array {}", &text);
+//    let mut lex = Lex::new(0, 1, 1);
+//    match json::parse_array(&text, &mut lex) {
+//        Ok(a) => Ok((NS(&text[lex.off..]), From::from(a))),
+//        _ => {
+//            let kind = nom::ErrorKind::Custom(lex.off as u32);
+//            return Err(nom::Err::Error(nom::Context::Code(text, kind)));
+//        }
+//    }
+//}
+//#[allow(dead_code)] // TODO: Can be removed.
+//fn nom_json_object(text: NS) -> nom::IResult<NS, Json> {
+//    check_next_byte(text, b'{')?;
+//    let mut lex = Lex::new(0, 1, 1);
+//    match json::parse_object(&text, &mut lex) {
+//        Ok(o) => Ok((NS(&text[lex.off..]), o)),
+//        _ => {
+//            let kind = nom::ErrorKind::Custom(lex.off as u32);
+//            return Err(nom::Err::Error(nom::Context::Code(text, kind)));
+//        }
+//    }
+//}
+//
 
 //---- Expression Operations, in PEG grammar
 //
@@ -365,15 +365,10 @@ named!(nom_key(NS) -> (Option<String>, Option<isize>),
     alt!(
         nom_identifier => { |s: NS| (Some((&s).to_string()), None) } |
         nom_isize => { |i: isize| (None, Some(i)) } |
-        nom_json_string => { |s: Json|
-            match s {
-                Json::String(s) => {
-                    let off = s.parse().map(|x| Some(x)).unwrap_or(None);
-                    (Some(s), off)
-                },
-                _ => unreachable!(),
-            }
-        }
+        nom_json_string => { |s: String| {
+            let off = s.parse().map(|x| Some(x)).unwrap_or(None);
+            (Some(s), off)
+        }}
     )
 );
 named!(nom_primary_index_short(NS) ->
@@ -510,10 +505,8 @@ named!(nom_primary_collection1(NS) -> (Vec<Thunk>, Option<NS>),
 );
 named!(nom_object_key(NS) -> Thunk,
     alt!(
-        nom_identifier => {
-            |s: NS| Thunk::Literal(Json::String((&s).to_string()), false)
-        } |
-        nom_json_string => { |s| Thunk::Literal(s, false) } |
+        nom_identifier => { |s: NS| Thunk::String((&s).to_string(), false) } |
+        nom_json_string => { |s| Thunk::String(s, false) } |
         nom_primary_paran_expr
     )
 );
@@ -563,14 +556,11 @@ named!(nom_primary_unarynot_expr(NS) -> Thunk,
 named!(nom_primary_literal(NS) -> (Thunk, Option<NS>),
     do_parse!(
         thunk: alt!(
-                nom_null  => { |_| Thunk::Literal(Json::Null, false) } |
-                nom_true  => { |_| Thunk::Literal(Json::Bool(true), false) } |
-                nom_false => { |_| Thunk::Literal(Json::Bool(false), false) } |
+                nom_null  => { |_| Thunk::Null(false) } |
+                nom_true  => { |_| Thunk::Bool(true, false) } |
+                nom_false => { |_| Thunk::Bool(false, false) } |
                 nom_number => { number_literal } |
-                nom_json_string => { |s| Thunk::Literal(s, false) }
-                // TODO: This is redundant in place of collection-list.
-                // nom_json_array => { |a| Thunk::Literal(a, false) } |
-                // nom_json_object => { |o| Thunk::Literal(o, false) }
+                nom_json_string => { |s| Thunk::String(s, false) }
                ) >>
           opt: nom_opt >>
         (thunk, opt)
@@ -648,10 +638,13 @@ fn identifier_to_literal((s, opt): (NS, Option<NS>)) -> Thunk {
 }
 
 fn literal_to_thunk((thunk, opt): (Thunk, Option<NS>)) -> Thunk {
+    let opt = opt.map_or(false, |_| true);
     match thunk {
-        Thunk::Literal(val, _) => {
-            Thunk::Literal(val, opt.map_or(false, |_| true))
-        },
+        Thunk::Null(_) => Thunk::Null(opt),
+        Thunk::Bool(val, _) => Thunk::Bool(val, opt),
+        Thunk::Integer(val, _) => Thunk::Integer(val, opt),
+        Thunk::Float(val, _) => Thunk::Float(val, opt),
+        Thunk::String(val, _) => Thunk::String(val, opt),
         _ => unreachable!(),
     }
 }
@@ -678,9 +671,9 @@ fn slice_to_thunk((start, end, opt): (isize, isize, Option<NS>))
 fn number_literal(s: NS) -> Thunk {
     //println!("number_literal ..... {:?}", s);
     if let Ok(n) = (&s).parse::<i128>() {
-        Thunk::Literal(Json::Integer(n), false)
+        Thunk::Integer(n, false)
     } else if let Ok(f) = (&s).parse::<f64>() {
-        Thunk::Literal(Json::Float(f), false)
+        Thunk::Float(f, false)
     } else {
         unreachable!()
     }
@@ -697,10 +690,10 @@ fn iterate_to_thunk((thunks, opt): (Vec<Thunk>, Option<NS>)) -> Thunk {
     //println!("iterate ........ {:?}", thunks);
     let thunks = thunks.into_iter().map(|thunk|
         match thunk {
-            Thunk::Literal(Json::Integer(n), opt2) => {
+            Thunk::Integer(n, opt2) => {
                 Thunk::IndexShortcut(None, Some(n as isize), opt1 || opt2)
             },
-            Thunk::Literal(Json::String(s), opt2) => {
+            Thunk::String(s, opt2) => {
                 Thunk::IndexShortcut(Some(s), None, opt1 || opt2)
             },
             thunk => thunk,

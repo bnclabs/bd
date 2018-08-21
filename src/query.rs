@@ -6,10 +6,9 @@ use std::collections::HashMap;
 
 use nom::{self, {types::CompleteStr as NS}};
 
-use util;
-use json::{self, Json};
+use json::{self};
 use query_nom::parse_program_nom;
-use document::{Document,KeyValue};
+use document::{self, Document, Property};
 
 // TODO: Parametrise Thunk over different types of Document.
 // TODO: Better to replace panic with assert!() macro.
@@ -23,10 +22,12 @@ pub type Result<T> = result::Result<T,Error>;
 
 #[derive(Debug,Eq,PartialEq)]
 pub enum Error {
+    InvalidKey,
     Parse(String),
     ParseJson(json::Error),
     Op(Option<json::Error>, String),
     InvalidArg(String),
+    InvalidType(String),
     InvalidFunction(String),
 }
 
@@ -35,11 +36,13 @@ impl fmt::Display for Error {
         use query::Error::*;
 
         match self {
+            InvalidKey => write!(f, "key must be string type"),
             Parse(s) => write!(f, "{}", s),
             ParseJson(err) => write!(f, "parsing json, {}", err),
             Op(Some(err), s) => write!(f, "{} error, {}", s, err),
             Op(None, s) => write!(f, "op error, {}", s),
             InvalidArg(s) => write!(f, "{}", s),
+            InvalidType(s) => write!(f, "{}", s),
             InvalidFunction(s) => write!(f, "{}", s),
         }
     }
@@ -92,7 +95,13 @@ pub enum Thunk where {
     Empty,
     Identity,
     Recurse,
-    Literal(Json, bool),
+    // Literals
+    Null(bool),
+    Bool(bool, bool),
+    Integer(i128, bool),
+    Float(f64, bool),
+    String(String, bool),
+    // expressions
     IndexShortcut(Option<String>, Option<isize>, bool),
     Identifier(String, bool),
     Slice(isize, isize, bool),
@@ -126,12 +135,6 @@ pub enum Thunk where {
     Builtin(String, Vec<Thunk>),
 }
 
-impl From<Json> for Thunk {
-    fn from(val: Json) -> Thunk {
-        Thunk::Literal(val, false)
-    }
-}
-
 impl FromStr for Thunk {
     type Err=Error;
 
@@ -162,9 +165,23 @@ impl<'a, D> FnMut<(D,&'a mut Context<D>)> for Thunk where D: Document {
                 Ok(doc.recurse())
             },
 
-            Literal(literal, _) => { // vecot of single item
-                Ok(vec![D::from(literal.clone())])
+            // literal
+            Null(_) => {
+                Ok(vec![D::null()])
             },
+            Bool(val, _) => {
+                Ok(vec![From::from(*val)])
+            },
+            Integer(val, _) => {
+                Ok(vec![From::from(*val)])
+            },
+            Float(val, _) => {
+                Ok(vec![From::from(*val)])
+            },
+            String(val, _) => {
+                Ok(vec![From::from(val.clone())])
+            },
+
 
             IndexShortcut(key, off, opt) => { // vector of single item
                 let res: Result<Output<D>>;
@@ -186,7 +203,7 @@ impl<'a, D> FnMut<(D,&'a mut Context<D>)> for Thunk where D: Document {
 
                 let res = doc
                     .slice(*start, *end)
-                    .ok_or_else( || Op(None, "json not an array".to_string()));
+                    .ok_or_else( || Op(None, "doc not an array".to_string()));
                 if *opt && res.is_err() { Ok(vec![]) } else { Ok(vec![res?]) }
             },
 
@@ -315,19 +332,19 @@ fn do_dict<D>(
     doc: D, c: &mut Context<D>)
     -> Result<Output<D>> where D: Document
 {
-    let mut dicts: Vec<Vec<KeyValue<D>>> = vec![vec![]];
+    let mut dicts: Vec<Vec<Property<D>>> = vec![vec![]];
     let mut keys: Vec<String> = Vec::with_capacity(kv_thunks.len());
     for (kthunk, vthunk) in kv_thunks.iter_mut() {
         keys.clear();
         for key in kthunk(doc.clone(), c)? {
-            keys.push(key.string().map_err(Into::into)?)
+            keys.push(key.string().ok_or(Error::InvalidKey)?);
         }
-        let kvss: Vec<Vec<KeyValue<D>>> = match vthunk {
+        let kvss: Vec<Vec<Property<D>>> = match vthunk {
             Some(ref mut vthunk) => {
                 vthunk(doc.clone(), c)?.into_iter().map(|val|
                     keys.clone().into_iter()
                     .zip(iter::repeat(val).take(keys.len()))
-                    .map(|(k,v)| KeyValue::new(k,v))
+                    .map(|(k,v)| Property::new(k,v))
                     .collect()
                 ).collect()
             },
@@ -338,17 +355,17 @@ fn do_dict<D>(
                 }
                 vec![
                     keys.clone().into_iter()
-                    .zip(vals).map(|(k,v)| KeyValue::new(k,v)).collect()
+                    .zip(vals).map(|(k,v)| Property::new(k,v)).collect()
                 ]
             },
         };
-        let mut next_dicts: Vec<Vec<KeyValue<D>>> = Vec::new();
+        let mut next_dicts: Vec<Vec<Property<D>>> = Vec::new();
         let n = kvss.len();
         let z =  kvss.into_iter().zip(iter::repeat(dicts).take(n).into_iter());
         for (kvs, mut dicts) in z {
             for dict in dicts.iter_mut() {
                 kvs.clone().into_iter().for_each(
-                    |kv| util::upsert_object_key(dict, kv)
+                    |kv| document::upsert_object_key(dict, kv)
                 );
             }
             next_dicts.append(&mut dicts);
