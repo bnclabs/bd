@@ -667,6 +667,10 @@ impl Document for Json {
         Json::Null
     }
 
+    fn boolean(self) -> Option<bool> {
+        match self { Json::Bool(s) => Some(s), _ => None }
+    }
+
     fn string(self) -> Option<String> {
         match self { Json::String(s) => Some(s), _ => None }
     }

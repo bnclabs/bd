@@ -6,6 +6,8 @@ use std::cmp::Ordering;
 
 use query;
 
+// TODO: make all iterative Document methods, like map, filter ... lazy
+
 #[derive(Debug,Clone,Copy)]
 pub enum Doctype {
     Null,
@@ -35,6 +37,8 @@ pub trait Document :
     fn null() -> Self;
 
     fn doctype(&self) -> Doctype;
+
+    fn boolean(self) -> Option<bool>;
 
     fn string(self) -> Option<String>;
 

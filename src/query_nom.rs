@@ -21,6 +21,9 @@ named!(nom_identifier(NS) -> NS, ws!(re_find!(r"^[A-Za-z_][0-9A-Za-z_]*")));
 named!(nom_null(NS) -> NS, ws!(tag!("null")));
 named!(nom_true(NS) -> NS, ws!(tag!("true")));
 named!(nom_false(NS) -> NS, ws!(tag!("false")));
+named!(nom_index(NS) -> isize,
+    flat_map!(ws!(re_find!(r#"^\d+"#)), parse_to!(isize))
+);
 named!(nom_isize(NS) -> isize,
     flat_map!(ws!(re_find!(r#"^[+-]?\d+"#)), parse_to!(isize))
 );
@@ -364,7 +367,7 @@ named!(nom_mult_expr(NS) -> (NS, Thunk),
 named!(nom_key(NS) -> (Option<String>, Option<isize>),
     alt!(
         nom_identifier => { |s: NS| (Some((&s).to_string()), None) } |
-        nom_isize => { |i: isize| (None, Some(i)) } |
+        nom_index => { |i: isize| (None, Some(i)) } |
         nom_json_string => { |s: String| {
             let off = s.parse().map(|x| Some(x)).unwrap_or(None);
             (Some(s), off)

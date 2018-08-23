@@ -13,6 +13,8 @@ use document::{self, Document, Doctype, Docitem, Property, DocIterator};
 // TODO: Parametrise Thunk over different types of Document.
 // TODO: Better to replace panic with assert!() macro.
 // TODO: Don't use vec![] macro, try to use with_capacity.
+// TODO: ? operator is not consistent and intuitive, a through review
+//       and test cases is required.
 
 type Output<D> = Vec<D>;
 
@@ -649,15 +651,17 @@ fn builtin_keys<D>(args: &mut Vec<Thunk>, doc: D, _c: &mut Context<D>)
     let dt = doc.doctype();
     match dt {
         Doctype::Array => {
-            let f: fn(<D as DocIterator<i32,D>>::Item) -> D =
-                |x| From::from(x.key() as i128);
+            let f: fn(<D as DocIterator<i32,D>>::Item) -> D = |x| {
+                From::from(x.key() as i128)
+            };
             let out = <D as DocIterator<i32,D>>::map(doc, f).unwrap();
             let out = From::from(out);
             Ok(vec![out])
         },
         Doctype::Object => {
-            let f: fn(<D as DocIterator<String,D>>::Item) -> D =
-                |x| From::from(x.key());
+            let f: fn(<D as DocIterator<String,D>>::Item) -> D = |x| {
+                From::from(x.key())
+            };
             let out = <D as DocIterator<String,D>>::map(doc, f).unwrap();
             let out = From::from(out);
             Ok(vec![out])
@@ -726,13 +730,88 @@ fn builtin_map<D>(args: &mut Vec<Thunk>, doc: D, c: &mut Context<D>)
     assert_args_len(&args, 1)?;
     let thunk = args.index_mut(0);
     let dt = doc.doctype();
-    let mut out = Vec::new();
-    match docvalues(doc) {
-        Some(vals) => {
-            for val in vals.into_iter() { out.push(thunk(val, c)?.remove(0)) }
+    match dt {
+        Doctype::String | Doctype::Array => {
+            let mut out = Vec::new();
+            let f: fn(<D as DocIterator<i32,D>>::Item) -> D = |x| {
+                x.value()
+            };
+            for val in <D as DocIterator<i32,D>>::map(doc, f).unwrap() {
+                out.push(thunk(val, c)?.remove(0));
+            }
             Ok(vec![From::from(out)])
         },
-        None => Err(Error::Op(None, format!("cannot map over {:?}", dt)))
+        Doctype::Object => {
+            let mut out = Vec::new();
+            let f: fn(<D as DocIterator<String,D>>::Item) -> D = |x| {
+                From::from(vec![From::from(x.key_ref().clone()), x.value()])
+            };
+            for arr in <D as DocIterator<String,D>>::map(doc, f).unwrap() {
+                let key = arr.index_ref(0).unwrap().clone().string().unwrap();
+                let val = arr.index(1).unwrap();
+                out.push(Property::new(key, thunk(val, c)?.remove(0)))
+            }
+            Ok(vec![From::from(out)])
+        },
+        _ => Err(Error::Op(None, format!("cannot map over {:?}", dt))),
+    }
+}
+
+fn builtin_any<D>(args: &mut Vec<Thunk>, doc: D, c: &mut Context<D>)
+    -> Result<Output<D>> where D: Document
+{
+    assert_args_len(&args, 1)?;
+    let thunk = args.index_mut(0);
+    let dt = doc.doctype();
+    match dt {
+        Doctype::String | Doctype::Array => {
+            let f =  |x: <D as DocIterator<i32,D>>::Item| -> bool {
+                thunk(x.value(), c).map(
+                    |mut x| x.remove(0).boolean().unwrap_or(false)
+                ).unwrap_or(false)
+            };
+            let out = <D as DocIterator<i32,D>>::any(doc, f).unwrap();
+            Ok(vec![From::from(out)])
+        },
+        Doctype::Object => {
+            let f = |x: <D as DocIterator<String,D>>::Item| -> bool {
+                thunk(x.value(), c).map(
+                    |mut x| x.remove(0).boolean().unwrap_or(false)
+                ).unwrap_or(false)
+            };
+            let out = <D as DocIterator<String,D>>::any(doc, f).unwrap();
+            Ok(vec![From::from(out)])
+        },
+        _ => Err(Error::Op(None, format!("cannot map over {:?}", dt))),
+    }
+}
+
+fn builtin_all<D>(args: &mut Vec<Thunk>, doc: D, c: &mut Context<D>)
+    -> Result<Output<D>> where D: Document
+{
+    assert_args_len(&args, 1)?;
+    let thunk = args.index_mut(0);
+    let dt = doc.doctype();
+    match dt {
+        Doctype::String | Doctype::Array => {
+            let f = |x: <D as DocIterator<i32,D>>::Item| -> bool {
+                thunk(x.value(), c).map(
+                    |mut x| x.remove(0).boolean().unwrap_or(false)
+                ).unwrap_or(false)
+            };
+            let out = <D as DocIterator<i32,D>>::all(doc, f).unwrap();
+            Ok(vec![From::from(out)])
+        },
+        Doctype::Object => {
+            let f = |x: <D as DocIterator<String,D>>::Item| -> bool {
+                thunk(x.value(), c).map(
+                    |mut x| x.remove(0).boolean().unwrap_or(false)
+                ).unwrap_or(false)
+            };
+            let out = <D as DocIterator<String,D>>::all(doc, f).unwrap();
+            Ok(vec![From::from(out)])
+        },
+        _ => Err(Error::Op(None, format!("cannot map over {:?}", dt))),
     }
 }
 
@@ -796,6 +875,8 @@ impl<D> Context<D> where D: Document {
         c.set_name("has", builtin_has);
         c.set_name("in", builtin_indoc);
         c.set_name("map", builtin_map);
+        c.set_name("any", builtin_any);
+        c.set_name("all", builtin_all);
         c
     }
 
@@ -1000,10 +1081,10 @@ mod test {
         let out = thunk(doc.clone(), &mut c).unwrap();
         assert_eq!("[\"hello\"]", &format!("{:?}", out));
 
-        thunk = ".-2".parse().unwrap();
+        thunk = ".2".parse().unwrap();
         let doc: Json = r#"[10, true, "hello"]"#.parse().unwrap();
         let out = thunk(doc.clone(), &mut c).unwrap();
-        assert_eq!("[true]", &format!("{:?}", out));
+        assert_eq!(r#"["hello"]"#, &format!("{:?}", out));
 
         thunk = ".[0]".parse().unwrap();
         let doc: Json = r#"[10, true, "hello"]"#.parse().unwrap();
@@ -1629,11 +1710,97 @@ mod test {
         let out = thunk(doc.clone(), &mut c).unwrap();
         assert_eq!(refval, &format!("{:?}", out));
 
-        // TODO: enable this test case after implementing map.
-        //thunk = r#"map(in([0,1]))"#.parse().unwrap();
-        //let doc: Json = r#"[2, 0]"#.parse().unwrap();
-        //let refval = r#"[false,true]"#;
-        //let out = thunk(doc.clone(), &mut c).unwrap();
-        //assert_eq!(refval, &format!("{:?}", out));
+        thunk = r#"map(in([0,1]))"#.parse().unwrap();
+        let doc: Json = r#"[2, 0]"#.parse().unwrap();
+        let refval = r#"[[false,true]]"#;
+        let out = thunk(doc.clone(), &mut c).unwrap();
+        assert_eq!(refval, &format!("{:?}", out));
+    }
+
+    #[test]
+    fn test_query_builtin_map() {
+        let mut c = Context::new();
+        let mut thunk: Thunk = r#"map(.)"#.parse().unwrap();
+
+        let doc: Json = r#"["foo", "bar"]"#.parse().unwrap();
+        let refval = r#"[["foo","bar"]]"#;
+        let out = thunk(doc.clone(), &mut c).unwrap();
+        assert_eq!(refval, &format!("{:?}", out));
+
+        thunk = r#"map(.+1)"#.parse().unwrap();
+        let doc: Json = r#"[1, 2, 3]"#.parse().unwrap();
+        let refval = r#"[[2,3,4]]"#;
+        let out = thunk(doc.clone(), &mut c).unwrap();
+        assert_eq!(refval, &format!("{:?}", out));
+
+        thunk = r#"map(.+1)"#.parse().unwrap();
+        let doc: Json = r#"{"foo":1, "bar":2}"#.parse().unwrap();
+        let refval = r#"[{"bar":3,"foo":2}]"#;
+        let out = thunk(doc.clone(), &mut c).unwrap();
+        assert_eq!(refval, &format!("{:?}", out));
+
+        thunk = r#"map(.+1)"#.parse().unwrap();
+        let doc: Json = r#"{"a": 1, "b": 2, "c": 3}"#.parse().unwrap();
+        let refval = r#"[{"a":2,"b":3,"c":4}]"#;
+        let out = thunk(doc.clone(), &mut c).unwrap();
+        assert_eq!(refval, &format!("{:?}", out));
+    }
+
+    #[test]
+    fn test_query_builtin_any() {
+        let mut c = Context::new();
+        let mut thunk: Thunk = r#"any(. == 1)"#.parse().unwrap();
+
+        let doc: Json = r#"[1, 2]"#.parse().unwrap();
+        let refval = r#"[true]"#;
+        let out = thunk(doc.clone(), &mut c).unwrap();
+        assert_eq!(refval, &format!("{:?}", out));
+
+        thunk = r#"any(. == "a")"#.parse().unwrap();
+        let doc: Json = r#"{"x": "a", "y": "b"}"#.parse().unwrap();
+        let refval = r#"[true]"#;
+        let out = thunk(doc.clone(), &mut c).unwrap();
+        assert_eq!(refval, &format!("{:?}", out));
+
+        thunk = r#"any(. == 1)"#.parse().unwrap();
+        let doc: Json = r#"[2,3]"#.parse().unwrap();
+        let refval = r#"[false]"#;
+        let out = thunk(doc.clone(), &mut c).unwrap();
+        assert_eq!(refval, &format!("{:?}", out));
+
+        thunk = r#"any(. == "a")"#.parse().unwrap();
+        let doc: Json = r#"{"x": "c", "y": "b"}"#.parse().unwrap();
+        let refval = r#"[false]"#;
+        let out = thunk(doc.clone(), &mut c).unwrap();
+        assert_eq!(refval, &format!("{:?}", out));
+    }
+
+    #[test]
+    fn test_query_builtin_all() {
+        let mut c = Context::new();
+        let mut thunk: Thunk = r#"all(. == 1)"#.parse().unwrap();
+
+        let doc: Json = r#"[1, 1]"#.parse().unwrap();
+        let refval = r#"[true]"#;
+        let out = thunk(doc.clone(), &mut c).unwrap();
+        assert_eq!(refval, &format!("{:?}", out));
+
+        thunk = r#"all(. == "a")"#.parse().unwrap();
+        let doc: Json = r#"{"x": "a", "y": "a"}"#.parse().unwrap();
+        let refval = r#"[true]"#;
+        let out = thunk(doc.clone(), &mut c).unwrap();
+        assert_eq!(refval, &format!("{:?}", out));
+
+        thunk = r#"all(. == 1)"#.parse().unwrap();
+        let doc: Json = r#"[1,3]"#.parse().unwrap();
+        let refval = r#"[false]"#;
+        let out = thunk(doc.clone(), &mut c).unwrap();
+        assert_eq!(refval, &format!("{:?}", out));
+
+        thunk = r#"all(. == "a")"#.parse().unwrap();
+        let doc: Json = r#"{"x": "a", "y": "b"}"#.parse().unwrap();
+        let refval = r#"[false]"#;
+        let out = thunk(doc.clone(), &mut c).unwrap();
+        assert_eq!(refval, &format!("{:?}", out));
     }
 }
