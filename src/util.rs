@@ -1,6 +1,7 @@
-pub fn slice_range_check(start: isize, end: isize, len: isize)
+pub fn slice_range_check(start: isize, end: isize, len: usize)
     -> Option<(usize, usize)>
 {
+    let len = len as isize;
     let start = if start < 0 { start + len } else { start };
     if start < 0 || start >= len { return None }
 
@@ -18,8 +19,9 @@ pub fn slice_range_check(start: isize, end: isize, len: isize)
     Some((start as usize, end as usize))
 }
 
-pub fn normalized_offset(off: isize, len: isize) -> Option<isize> {
+pub fn normalized_offset(off: isize, len: usize) -> Option<usize> {
+    let len = len as isize;
     let off = if off < 0 { off + len } else { off };
-    if off >= 0 && off < len { Some(off) } else { None }
+    if off >= 0 && off < len { Some(off as usize) } else { None }
 }
 

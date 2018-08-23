@@ -2,12 +2,10 @@ use std::{self, result, char, error, io};
 use std::str::{self, FromStr,CharIndices};
 use std::fmt::{self, Write};
 use std::ops::{Neg, Not, Mul, Div, Rem, Add, Sub, Shr, Shl};
-use std::ops::{BitAnd, BitXor, BitOr, Index, IndexMut};
-use std::ops::{Range, RangeFrom, RangeTo, RangeToInclusive, RangeInclusive};
-use std::ops::{RangeFull};
-use std::{vec};
+use std::ops::{BitAnd, BitXor, BitOr};
 
-use document::{self, Document, Doctype, And, Or, Recurse, Slice};
+use document::{self, Document, Doctype, Docitem, Docindex};
+use document::{And, Or, Recurse, Slice, DocIterator};
 use lex::Lex;
 use util;
 
@@ -499,46 +497,6 @@ impl Json {
         }
     }
 
-    pub fn array_ref(&self) -> Result<&Vec<Json>> {
-        match self {
-            Json::Array(a) => Ok(a),
-            _ => {
-                let err = format!("expected array, found {}", self.variant());
-                Err(Error::NotMyType(err))
-            },
-        }
-    }
-
-    pub fn array_mut(&mut self) -> Result<&mut Vec<Json>> {
-        match self {
-            Json::Array(a) => Ok(a),
-            _ => {
-                let err = format!("expected array, found {}", self.variant());
-                Err(Error::NotMyType(err))
-            },
-        }
-    }
-
-    pub fn object_ref(&self) -> Result<&Vec<Property>> {
-        match self {
-            Json::Object(o) => Ok(o),
-            _ => {
-                let err = format!("expected array, found {}", self.variant());
-                Err(Error::NotMyType(err))
-            },
-        }
-    }
-
-    pub fn object_mut(&mut self) -> Result<&mut Vec<Property>> {
-        match self {
-            Json::Object(o) => Ok(o),
-            _ => {
-                let err = format!("expected object, found {}", self.variant());
-                Err(Error::NotMyType(err))
-            },
-        }
-    }
-
     fn encode_string<W: Write>(w: &mut W, val: &str) -> fmt::Result {
         write!(w, "\"")?;
 
@@ -557,75 +515,6 @@ impl Json {
             write!(w, "{}", &val[start..])?;
         }
         write!(w, "\"")
-    }
-
-    fn string(self) -> Option<String> {
-        match self { Json::String(s) => Some(s), _ => None }
-    }
-
-    fn index(self, off: isize) -> Result<Json> {
-        match self {
-            Json::Array(mut a) => {
-                let len = a.len() as isize;
-                if let Some(off) = util::normalized_offset(off, len) {
-                    Ok(a.remove(off as usize))
-                } else {
-                    Err(Error::IndexUnbound(off, off))
-                }
-            },
-            _ => {
-                let err = format!("expected array, found {}", self.variant());
-                Err(Error::NotMyType(err))
-            },
-        }
-    }
-
-    pub fn index_ref(&self, i: usize) -> Result<&Json> {
-        let a = self.array_ref()?;
-        if i < a.len() {
-            Ok(&a[i])
-        } else {
-            Err(Error::IndexUnbound(i as isize, i as isize))
-        }
-    }
-
-    pub fn index_mut(&mut self, i: usize) -> Result<&mut Json> {
-        use json::Error::IndexUnbound;
-        let a = self.array_mut()?;
-        if i < a.len() {
-            Ok(&mut a[i])
-        } else {
-            Err(IndexUnbound(i as isize, i as isize))
-        }
-    }
-
-    pub fn get<'a>(self, key: &'a str) -> Result<Json> {
-        match self {
-            Json::Object(mut obj) => {
-                let off = search_by_key(&obj, key)?;
-                Ok(obj.remove(off).value())
-            },
-            _ => {
-                let err = format!("expected object, found {}", self.variant());
-                Err(Error::NotMyType(err))
-            },
-        }
-    }
-
-    pub fn get_ref<'a>(&self, key: &'a str) -> Result<&Json> {
-        let obj = self.object_ref()?;
-        let off = search_by_key(obj, key)?;
-        Ok(obj[off].value_ref())
-    }
-
-    pub fn get_mut<'a>(&mut self, key: &'a str) -> Result<&mut Json> {
-        let obj = self.object_mut()?;
-        let off = search_by_key(obj, key)?;
-        Ok(obj[off].value_mut())
-    }
-
-    pub fn upsert_key(&mut self, kv: Property) {
-        document::upsert_object_key(self.object_mut().unwrap(), kv);
     }
 
     pub fn do_recurse(&self, list: &mut Vec<Json>) {
@@ -779,165 +668,156 @@ impl Document for Json {
     }
 
     fn string(self) -> Option<String> {
-        self.string()
+        match self { Json::String(s) => Some(s), _ => None }
     }
 
-    fn index(self, off: isize) -> Result<Json> {
-        Ok(self.index(off)?)
-    }
-
-    fn get<'a>(self, key: &'a str) -> Result<Json> {
-        Ok(self.get(key)?)
-    }
-
-    fn get_ref<'a>(&self, key: &'a str) -> Result<&Json> {
-        Ok(self.get_ref(key)?)
-    }
-
-    fn values(self) -> Option<Box<Iterator<Item=Json>>> {
+    fn get<'a>(self, key: &'a str) -> Option<Json> {
         match self {
-            Json::Array(arr) => {
-                Some(Box::new(arr.into_iter()))
-            },
-            Json::Object(obj) => {
-                let iter = PropertyIter{iter: obj.into_iter()};
-                Some(Box::new(iter))
+            Json::Object(mut obj) => {
+                let off = search_by_key(&obj, key).ok()?;
+                Some(obj.remove(off).value())
             },
             _ => None
         }
     }
 
-    fn len(self) -> Result<Json> {
+    fn get_ref<'a>(&self, key: &'a str) -> Option<&Json> {
         match self {
-            Json::String(s) => Ok(Json::Integer(s.len() as i128)),
-            Json::Array(a) => Ok(Json::Integer(a.len() as i128)),
-            Json::Object(o) => Ok(Json::Integer(o.len() as i128)),
-            Json::Null => Ok(Json::Integer(0)),
-            _ => {
-                let err = format!("cannot find len for {}", self.variant());
-                Err(Error::NotMyType(err))
-            },
+            Json::Object(obj) => {
+                let off = search_by_key(obj, key).ok()?;
+                Some(obj[off].value_ref())
+            }
+            _ => None,
         }
     }
 
-    fn chars(self) -> Result<Json> {
+    fn len(self) -> Option<Json> {
+        match self {
+            Json::String(s) => Some(Json::Integer(s.len() as i128)),
+            Json::Array(a) => Some(Json::Integer(a.len() as i128)),
+            Json::Object(o) => Some(Json::Integer(o.len() as i128)),
+            Json::Null => Some(Json::Integer(0)),
+            _ => None,
+        }
+    }
+}
+
+impl Docindex<isize> for Json {
+    fn index(self, off: isize) -> Option<Json> {
+        match self {
+            Json::Array(a) => {
+                Some(a[util::normalized_offset(off, a.len())?].clone())
+            }
+            _ => None
+        }
+    }
+
+    fn index_ref(&self, off: isize) -> Option<&Json> {
+        match self {
+            Json::Array(a) => {
+                Some(&a[util::normalized_offset(off, a.len())?])
+            }
+            _ => None
+        }
+    }
+
+    fn index_mut(&mut self, off: isize) -> Option<&mut Json> {
+        match self {
+            Json::Array(a) => {
+                let off = util::normalized_offset(off, a.len())?;
+                Some(&mut a[off])
+            }
+            _ => None
+        }
+    }
+}
+
+impl DocIterator<i32,Json> for Json {
+    type Item=ArrayItem;
+
+    fn map<F>(self, mut f: F) -> Option<Vec<Json>>
+        where F: FnMut(ArrayItem) -> Json
+    {
         match self {
             Json::String(s) => {
-                let cs = s.chars().map(|c| Json::Integer(c as i128)).collect();
-                Ok(Json::Array(cs))
+                Some(s.chars().into_iter().enumerate()
+                    .map(|(i, c)|
+                        f(ArrayItem::new(i as i32, Json::Integer(c as i128)))
+                    )
+                    .collect()
+                )
             },
-            _ => {
-                let err = format!("cannot convert to chars for {}", self.variant());
-                Err(Error::NotMyType(err))
+            Json::Array(arr) => {
+                Some(arr.into_iter().enumerate()
+                    .map(|(i, x)| f(ArrayItem::new(i as i32, x)))
+                    .collect()
+                )
             },
+            _ => None
         }
     }
 
-    fn keys(self) -> Result<Json> {
+    fn any<F>(self, f: F) -> Option<bool> where F: FnMut(ArrayItem) -> bool {
         match self {
-            Json::Object(o) => {
-                let a = o.into_iter().map(|x| Json::String(x.key())).collect();
-                Ok(Json::Array(a))
+            Json::String(s) => {
+                Some(s.chars().into_iter().enumerate()
+                    .map(|(i, c)|
+                        ArrayItem::new(i as i32, Json::Integer(c as i128))
+                    ).any(f)
+                )
             },
-            Json::Array(a) => {
-                let a = (0..a.len()).map(|x| Json::Integer(x as i128)).collect();
-                Ok(Json::Array(a))
+            Json::Array(arr) => {
+                Some(arr.into_iter().enumerate()
+                    .map(|(i, x)| ArrayItem::new(i as i32, x))
+                    .any(f)
+                )
             },
-            _ => {
-                let err = format!("cannot take keys from {}", self.variant());
-                Err(Error::NotMyType(err))
-            }
+            _ => None
         }
     }
 
-    fn has(self, item: &Json) -> Result<Json> {
-        match (&self, item) {
-            (Json::Array(a), _) => Ok(Json::Bool(a.contains(item))),
-            (Json::Object(o), Json::String(s)) => {
-                let item = Property::new(s.clone(), Json::Null);
-                Ok(Json::Bool(o.iter().any(|kv| kv == &item)))
+    fn all<F>(self, f: F) -> Option<bool> where F: FnMut(ArrayItem) -> bool {
+        match self {
+            Json::String(s) => {
+                Some(s.chars().into_iter().enumerate()
+                    .map(|(i, c)|
+                        ArrayItem::new(i as i32, Json::Integer(c as i128))
+                    ).all(f)
+                )
             },
-            _ => {
-                let err = format!("not a container {}", self.variant());
-                Err(Error::NotMyType(err))
-            }
+            Json::Array(arr) => {
+                Some(arr.into_iter().enumerate()
+                    .map(|(i, x)| ArrayItem::new(i as i32, x))
+                    .all(f)
+                )
+            },
+            _ => None
         }
     }
 }
 
-impl Index<usize> for Json {
-    type Output=Json;
+impl DocIterator<String,Json> for Json {
+    type Item=Property;
 
-    fn index(&self, off: usize) -> &Json {
-        self.index_ref(off).unwrap()
+    fn map<F>(self, f: F) -> Option<Vec<Json>> where F: FnMut(Property) -> Json {
+        match self {
+            Json::Object(obj) => Some(obj.into_iter().map(f).collect()),
+            _ => None,
+        }
     }
-}
 
-impl IndexMut<usize> for Json {
-    fn index_mut(&mut self, off: usize) -> &mut Json {
-        self.index_mut(off).unwrap()
+    fn any<F>(self, f: F) -> Option<bool> where F: FnMut(Property) -> bool {
+        match self {
+            Json::Object(obj) => Some(obj.into_iter().any(f)),
+            _ => None
+        }
     }
-}
 
-impl<'a> Index<&'a str> for Json {
-    type Output=Json;
-
-    fn index(&self, key: &str) -> &Json {
-        self.get_ref(key).unwrap()
-    }
-}
-
-impl<'a> IndexMut<&'a str> for Json {
-    fn index_mut(&mut self, key: &str) -> &mut Json {
-        self.get_mut(key).unwrap()
-    }
-}
-
-impl Index<Range<usize>> for Json {
-    type Output=[Json];
-
-    fn index(&self, r: Range<usize>) -> &[Json] {
-        self.array_ref().unwrap().index(r)
-    }
-}
-
-impl Index<RangeFrom<usize>> for Json {
-    type Output=[Json];
-
-    fn index(&self, r: RangeFrom<usize>) -> &[Json] {
-        self.array_ref().unwrap().index(r)
-    }
-}
-
-impl Index<RangeTo<usize>> for Json {
-    type Output=[Json];
-
-    fn index(&self, r: RangeTo<usize>) -> &[Json] {
-        self.array_ref().unwrap().index(r)
-    }
-}
-
-impl Index<RangeToInclusive<usize>> for Json {
-    type Output=[Json];
-
-    fn index(&self, r: RangeToInclusive<usize>) -> &[Json] {
-        self.array_ref().unwrap().index(r)
-    }
-}
-
-impl Index<RangeInclusive<usize>> for Json {
-    type Output=[Json];
-
-    fn index(&self, r: RangeInclusive<usize>) -> &[Json] {
-        self.array_ref().unwrap().index(r)
-    }
-}
-
-impl Index<RangeFull> for Json {
-    type Output=[Json];
-
-    fn index(&self, r: RangeFull) -> &[Json] {
-        self.array_ref().unwrap().index(r)
+    fn all<F>(self, f: F) -> Option<bool> where F: FnMut(Property) -> bool {
+        match self {
+            Json::Object(obj) => Some(obj.into_iter().all(f)),
+            _ => None
+        }
     }
 }
 
@@ -1165,8 +1045,6 @@ impl Or for Json {
 }
 
 impl Recurse for Json {
-    type Output=Vec<Json>;
-
     fn recurse(&self) -> Vec<Json> {
         let mut list = Vec::new();
         self.do_recurse(&mut list);
@@ -1175,27 +1053,15 @@ impl Recurse for Json {
 }
 
 impl Slice for Json {
-    type Output=Option<Json>;
-
     fn slice(self, start: isize, end: isize) -> Option<Json> {
-        use json::Json::{Array, String as S};
-
         match self {
-            Array(arr) => {
-                let (start, end) = util::slice_range_check(
-                    start, end, arr.len() as isize
-                )?; // TODO: make this error
-                let mut res = Vec::new();
-                let start = start as usize;
-                let end = end as usize;
-                arr[start..end].iter().for_each(|item| res.push(item.clone()));
-                Some(Json::Array(res))
+            Json::Array(arr) => {
+                let (a, z) = util::slice_range_check(start, end, arr.len())?;
+                Some(Json::Array(arr[a..z].to_vec()))
             },
-            S(s) => {
-                let (start, end) = util::slice_range_check(
-                    start, end, s.len() as isize
-                )?; // TODO: make this error
-                Some(S(s[start..end].to_string()))
+            Json::String(s) => {
+                let (a, z) = util::slice_range_check(start, end, s.len())?;
+                Some(Json::String(s[a..z].to_string()))
             },
             _ => None,
         }
@@ -1240,22 +1106,6 @@ fn mixin_object(mut this: Vec<Property>, other: Vec<Property>)
     this
 }
 
-
-struct PropertyIter {
-    iter: vec::IntoIter<Property>,
-}
-
-impl Iterator for PropertyIter {
-    type Item=Json;
-
-    fn next(&mut self) -> Option<Json> {
-        if let Some(property) = self.iter.next() {
-            Some(property.value())
-        } else {
-            None
-        }
-    }
-}
 
 #[cfg(test)]
 mod tests {

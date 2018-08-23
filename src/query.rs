@@ -8,7 +8,7 @@ use nom::{self, {types::CompleteStr as NS}};
 
 use json::{self};
 use query_nom::parse_program_nom;
-use document::{self, Document, Property};
+use document::{self, Document, Doctype, Docitem, Property, DocIterator};
 
 // TODO: Parametrise Thunk over different types of Document.
 // TODO: Better to replace panic with assert!() macro.
@@ -27,7 +27,6 @@ pub enum Error {
     ParseJson(json::Error),
     Op(Option<json::Error>, String),
     InvalidArg(String),
-    InvalidType(String),
     InvalidFunction(String),
 }
 
@@ -42,7 +41,6 @@ impl fmt::Display for Error {
             Op(Some(err), s) => write!(f, "{} error, {}", s, err),
             Op(None, s) => write!(f, "op error, {}", s),
             InvalidArg(s) => write!(f, "{}", s),
-            InvalidType(s) => write!(f, "{}", s),
             InvalidFunction(s) => write!(f, "{}", s),
         }
     }
@@ -272,13 +270,23 @@ impl<'a, D> FnOnce<(D, &'a mut Context<D>)> for Thunk where D:Document {
 fn do_get_shortcut<D>(key: &str, doc: D, _: &mut Context<D>)
     -> Result<Output<D>> where D: Document
 {
-    Ok(vec![doc.get(key).map_err(Into::into)?])
+    if let Some(val) = doc.get_ref(key) {
+        Ok(vec![val.clone()])
+    } else {
+        let dt = doc.doctype();
+        Err(Error::Op(None, format!("cannot index {} into {:?}", key, dt)))
+    }
 }
 
 fn do_index_shortcut<D>(off: isize, doc: D, _: &mut Context<D>)
     -> Result<Output<D>> where D: Document
 {
-    Ok(vec![doc.index(off).map_err(Into::into)?])
+    if let Some(val) = doc.index_ref(off) {
+        Ok(vec![val.clone()])
+    } else {
+        let dt = doc.doctype();
+        Err(Error::Op( None, format!("cannot index {} into {:?}", off, dt)))
+    }
 }
 
 fn do_identifier<D>(symbol: &str, doc: D, c: &mut Context<D>)
@@ -294,10 +302,10 @@ fn do_identifier<D>(symbol: &str, doc: D, c: &mut Context<D>)
 fn do_iterate_values<D>(doc: D, _: &mut Context<D>)
     -> Result<Output<D>> where D: Document
 {
-    if let Some(iter) = doc.values() {
-        Ok(iter.collect())
-    } else {
-        Err(Error::Op(None, "not an iterable".to_string()))
+    let dt = doc.doctype();
+    match docvalues(doc) {
+        Some(vals) => Ok(vals),
+        None => Err(Error::Op(None, format!("{:?} not an iterable", dt))),
     }
 }
 
@@ -351,7 +359,16 @@ fn do_dict<D>(
             None => {
                 let mut vals = Vec::with_capacity(keys.len());
                 for k in keys.iter() {
-                    vals.push(doc.get_ref(k).map_err(Into::into)?.clone());
+                    match doc.get_ref(k) {
+                        Some(val) => vals.push(val.clone()),
+                        None => {
+                            let dt = doc.doctype();
+                            Error::Op(
+                                None,
+                                format!("cannot index {} into {:?}", k, dt)
+                            );
+                        },
+                    }
                 }
                 vec![
                     keys.clone().into_iter()
@@ -603,21 +620,50 @@ fn builtin_length<D>(args: &mut Vec<Thunk>, doc: D, _c: &mut Context<D>)
     -> Result<Output<D>> where D: Document
 {
     assert_args_len(&args, 0)?;
-    Ok(vec![doc.len().map_err(Into::into)?])
+    let dt = doc.doctype();
+    let res = doc.len()
+        .ok_or_else( || Error::Op(None, format!("no length for {:?}", dt)));
+    Ok(vec![res?])
 }
 
 fn builtin_chars<D>(args: &mut Vec<Thunk>, doc: D, _c: &mut Context<D>)
     -> Result<Output<D>> where D: Document
 {
     assert_args_len(&args, 0)?;
-    Ok(vec![doc.chars().map_err(Into::into)?])
+    let dt = doc.doctype();
+    match dt {
+        Doctype::String => {
+            let f: fn(<D as DocIterator<i32,D>>::Item) -> D = |x| x.value();
+            let out = <D as DocIterator<i32,D>>::map(doc, f).unwrap();
+            let out = From::from(out);
+            Ok(vec![out])
+        },
+        _ => Err(Error::Op(None, format!("{:?} not a string", dt)))
+    }
 }
 
 fn builtin_keys<D>(args: &mut Vec<Thunk>, doc: D, _c: &mut Context<D>)
     -> Result<Output<D>> where D: Document
 {
     assert_args_len(&args, 0)?;
-    Ok(vec![doc.keys().map_err(Into::into)?])
+    let dt = doc.doctype();
+    match dt {
+        Doctype::Array => {
+            let f: fn(<D as DocIterator<i32,D>>::Item) -> D =
+                |x| From::from(x.key() as i128);
+            let out = <D as DocIterator<i32,D>>::map(doc, f).unwrap();
+            let out = From::from(out);
+            Ok(vec![out])
+        },
+        Doctype::Object => {
+            let f: fn(<D as DocIterator<String,D>>::Item) -> D =
+                |x| From::from(x.key());
+            let out = <D as DocIterator<String,D>>::map(doc, f).unwrap();
+            let out = From::from(out);
+            Ok(vec![out])
+        },
+        _ => Err(Error::Op(None, format!("{:?} not iterable", dt))),
+    }
 }
 
 fn builtin_has<D>(args: &mut Vec<Thunk>, doc: D, c: &mut Context<D>)
@@ -625,7 +671,26 @@ fn builtin_has<D>(args: &mut Vec<Thunk>, doc: D, c: &mut Context<D>)
 {
     assert_args_len(&args, 1)?;
     let item = args.index_mut(0)(doc.clone(), c)?.remove(0);
-    Ok(vec![doc.has(&item).map_err(Into::into)?])
+    let dt = doc.doctype();
+    match dt {
+        Doctype::Array => {
+            let f = |x: <D as DocIterator<i32,D>>::Item| -> bool {
+                let value = x.value();
+                if value == item { true } else { false }
+            };
+            let out = <D as DocIterator<i32,D>>::any(doc, f).unwrap();
+            Ok(vec![From::from(out)])
+        },
+        Doctype::Object => {
+            let f = |x : <D as DocIterator<String,D>>::Item| -> bool {
+                let key: D = From::from(x.key());
+                if key == item { true } else { false }
+            };
+            let out = <D as DocIterator<String,D>>::any(doc, f).unwrap();
+            Ok(vec![From::from(out)])
+        },
+        _ => Err(Error::Op(None, format!("{:?} not iterable", dt))),
+    }
 }
 
 fn builtin_indoc<D>(args: &mut Vec<Thunk>, item: D, c: &mut Context<D>)
@@ -633,7 +698,57 @@ fn builtin_indoc<D>(args: &mut Vec<Thunk>, item: D, c: &mut Context<D>)
 {
     assert_args_len(&args, 1)?;
     let doc = args.index_mut(0)(item.clone(), c)?.remove(0);
-    Ok(vec![doc.has(&item).map_err(Into::into)?])
+    let dt = doc.doctype();
+    match dt {
+        Doctype::Array => {
+            let f = |x :<D as DocIterator<i32,D>>::Item| -> bool {
+                let value = x.value();
+                if value == item { true } else { false }
+            };
+            let out = <D as DocIterator<i32,D>>::any(doc, f).unwrap();
+            Ok(vec![From::from(out)])
+        },
+        Doctype::Object => {
+            let f = |x :<D as DocIterator<String,D>>::Item| -> bool {
+                let key: D = From::from(x.key());
+                if key == item { true } else { false }
+            };
+            let out = <D as DocIterator<String,D>>::any(doc, f).unwrap();
+            Ok(vec![From::from(out)])
+        },
+        _ => Err(Error::Op(None, format!("{:?} not iterable", dt))),
+    }
+}
+
+fn builtin_map<D>(args: &mut Vec<Thunk>, doc: D, c: &mut Context<D>)
+    -> Result<Output<D>> where D: Document
+{
+    assert_args_len(&args, 1)?;
+    let thunk = args.index_mut(0);
+    let dt = doc.doctype();
+    let mut out = Vec::new();
+    match docvalues(doc) {
+        Some(vals) => {
+            for val in vals.into_iter() { out.push(thunk(val, c)?.remove(0)) }
+            Ok(vec![From::from(out)])
+        },
+        None => Err(Error::Op(None, format!("cannot map over {:?}", dt)))
+    }
+}
+
+fn docvalues<D>(doc: D) -> Option<Vec<D>> where D: Document {
+    let dt = doc.doctype();
+    match dt {
+        Doctype::Array => {
+            let f: fn(<D as DocIterator<i32,D>>::Item) -> D = |x| x.value();
+            Some(<D as DocIterator<i32,D>>::map(doc, f).unwrap())
+        },
+        Doctype::Object => {
+            let f: fn(<D as DocIterator<String,D>>::Item) -> D = |x| x.value();
+            Some(<D as DocIterator<String,D>>::map(doc, f).unwrap())
+        },
+        _ => None
+    }
 }
 
 
@@ -680,6 +795,7 @@ impl<D> Context<D> where D: Document {
         c.set_name("keys", builtin_keys);
         c.set_name("has", builtin_has);
         c.set_name("in", builtin_indoc);
+        c.set_name("map", builtin_map);
         c
     }
 
@@ -821,11 +937,8 @@ mod test {
         assert_eq!("[10]", &format!("{:?}", out));
 
         let doc: Json = r#"{"notfoo": 10}"#.parse().unwrap();
-        let err = json::Error::KeyMissing(0, "foo".to_string());
-        assert_eq!(
-            Err(Error::Op(Some(err), "json op".to_string())),
-            thunk(doc.clone(), &mut c)
-        );
+        let err = "cannot index foo into Object".to_string();
+        assert_eq!(Err(Error::Op(None, err)), thunk(doc.clone(), &mut c));
 
         thunk = r#".foo?"#.parse().unwrap();
         let doc: Json = r#"{"nonfoo": 10}"#.parse().unwrap();
@@ -1018,7 +1131,7 @@ mod test {
         thunk = ".[]".parse().unwrap();
         let doc: Json = r#"10"#.parse().unwrap();
         assert_eq!(
-            Err(Error::Op(None, "not an iterable".to_string())),
+            Err(Error::Op(None, "Integer not an iterable".to_string())),
             thunk(doc.clone(), &mut c)
         );
 
