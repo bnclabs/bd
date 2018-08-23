@@ -1,7 +1,7 @@
+use std::{result, fmt, slice, vec};
 use std::ops::{Neg, Not, Mul, Div, Rem, Add, Sub};
 use std::ops::{Shr, Shl, BitAnd, BitXor, BitOr};
 use std::convert::{From};
-use std::{result, fmt};
 use std::cmp::Ordering;
 
 use query;
@@ -78,17 +78,15 @@ pub trait Slice : Sized {
     fn slice(self, start: isize, end: isize) -> Option<Self>;
 }
 
-pub trait DocIterator<K,D> where K: Ord, D: Document {
+pub trait DocIterator<K,D> where K: PartialOrd, D: Document {
     type Item: Docitem<K,D>;
 
-    fn map<F>(self, F) -> Option<Vec<D>> where F: FnMut(Self::Item) -> D;
+    fn iter(&self) -> Option<slice::Iter<KeyValue<K,D>>>;
 
-    fn any<F>(self, F) -> Option<bool> where F: FnMut(Self::Item) -> bool;
-
-    fn all<F>(self, F) -> Option<bool> where F: FnMut(Self::Item) -> bool;
+    fn into_iter(self) -> Option<vec::IntoIter<KeyValue<K,D>>>;
 }
 
-pub trait Docitem<K,D> where K: Ord, D: Document {
+pub trait Docitem<K,D> where K: PartialOrd, D: Document {
     fn key(self) -> K;
 
     fn key_ref(&self) -> &K;
@@ -104,42 +102,16 @@ pub trait Docitem<K,D> where K: Ord, D: Document {
 
 
 #[derive(Debug,Clone)]
-pub struct KeyValue<K,D>(K, D) where K: Ord , D: Document;
+pub struct KeyValue<K,D>(K, D) where K: PartialOrd , D: Document;
 
-pub type Property<D> = KeyValue<String,D>;
-
-pub type ArrayItem<D> = KeyValue<i32,D>;
-
-impl<K,D> Eq for KeyValue<K,D> where K: Ord, D: Document {}
-
-impl<K,D> PartialEq for KeyValue<K,D> where K: Ord, D: Document {
-    fn eq(&self, other: &KeyValue<K,D>) -> bool {
-        self.0 == other.0 // compare only the key.
-    }
-}
-
-impl<K,D> PartialOrd for KeyValue<K,D> where K: Ord, D: Document {
-    fn partial_cmp(&self, other: &KeyValue<K,D>) -> Option<Ordering> {
-        self.0.partial_cmp(&other.key_ref()) // compare only the key.
-    }
-}
-
-impl<K,D> Ord for KeyValue<K,D> where K: Ord, D: Document {
-    fn cmp(&self, other: &KeyValue<K,D>) -> Ordering {
-        self.0.cmp(&other.0) // compare only the key.
-    }
-}
-
-impl<K,D> KeyValue<K,D>
-    where K: Ord, D: Document
-{
+impl<K,D> KeyValue<K,D> where K: PartialOrd, D: Document {
     #[inline]
     pub fn new(key: K, value: D) -> KeyValue<K,D> {
         KeyValue(key, value)
     }
 }
 
-impl<K,D> Docitem<K,D> for KeyValue<K,D> where K : Ord, D: Document {
+impl<K,D> Docitem<K,D> for KeyValue<K,D> where K : PartialOrd, D: Document {
     #[inline]
     fn key(self) -> K {
         self.0
@@ -170,6 +142,41 @@ impl<K,D> Docitem<K,D> for KeyValue<K,D> where K : Ord, D: Document {
         self.1 = value;
     }
 }
+
+
+pub type ArrayItem<D> = KeyValue<i32,D>;
+
+impl<D> Eq for ArrayItem<D> where D: Document {}
+
+impl<D> PartialEq for ArrayItem<D> where D: Document {
+    fn eq(&self, other: &ArrayItem<D>) -> bool {
+        self.1 == other.1 // compare the value
+    }
+}
+
+impl<D> PartialOrd for ArrayItem<D> where D: Document {
+    fn partial_cmp(&self, other: &ArrayItem<D>) -> Option<Ordering> {
+        self.1.partial_cmp(&other.value_ref()) // compare the value
+    }
+}
+
+
+pub type Property<D> = KeyValue<String,D>;
+
+impl<D> Eq for Property<D> where D: Document {}
+
+impl<D> PartialEq for Property<D> where D: Document {
+    fn eq(&self, other: &Property<D>) -> bool {
+        self.0 == other.0 // compare only the key.
+    }
+}
+
+impl<D> PartialOrd for Property<D> where D: Document {
+    fn partial_cmp(&self, other: &Property<D>) -> Option<Ordering> {
+        self.0.partial_cmp(&other.key_ref()) // compare only the key.
+    }
+}
+
 
 pub fn search_by_key<D>(obj: &Vec<KeyValue<String,D>>, key: &str)
     -> result::Result<usize,usize> where D: Document

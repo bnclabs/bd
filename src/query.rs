@@ -8,7 +8,8 @@ use nom::{self, {types::CompleteStr as NS}};
 
 use json::{self};
 use query_nom::parse_program_nom;
-use document::{self, Document, Doctype, Docitem, Property, DocIterator};
+use document::{self, Document, Doctype, Docitem, DocIterator};
+use document::{ArrayItem, Property};
 
 // TODO: Parametrise Thunk over different types of Document.
 // TODO: Better to replace panic with assert!() macro.
@@ -635,10 +636,8 @@ fn builtin_chars<D>(args: &mut Vec<Thunk>, doc: D, _c: &mut Context<D>)
     let dt = doc.doctype();
     match dt {
         Doctype::String => {
-            let f: fn(<D as DocIterator<i32,D>>::Item) -> D = |x| x.value();
-            let out = <D as DocIterator<i32,D>>::map(doc, f).unwrap();
-            let out = From::from(out);
-            Ok(vec![out])
+            let out: Vec<ArrayItem<D>> = doc.into_iter().unwrap().collect();
+            Ok(vec![From::from(out)])
         },
         _ => Err(Error::Op(None, format!("{:?} not a string", dt)))
     }
@@ -651,20 +650,22 @@ fn builtin_keys<D>(args: &mut Vec<Thunk>, doc: D, _c: &mut Context<D>)
     let dt = doc.doctype();
     match dt {
         Doctype::Array => {
-            let f: fn(<D as DocIterator<i32,D>>::Item) -> D = |x| {
-                From::from(x.key() as i128)
-            };
-            let out = <D as DocIterator<i32,D>>::map(doc, f).unwrap();
-            let out = From::from(out);
-            Ok(vec![out])
+            let out: Vec<ArrayItem<D>> = doc.into_iter().unwrap()
+                .enumerate()
+                .map(
+                    |(i, x): (usize, ArrayItem<D>)|
+                    ArrayItem::new(i as i32, From::from(x.key() as i128))
+                ).collect();
+            Ok(vec![From::from(out)])
         },
         Doctype::Object => {
-            let f: fn(<D as DocIterator<String,D>>::Item) -> D = |x| {
-                From::from(x.key())
-            };
-            let out = <D as DocIterator<String,D>>::map(doc, f).unwrap();
-            let out = From::from(out);
-            Ok(vec![out])
+            let out: Vec<ArrayItem<D>> = doc.into_iter().unwrap()
+                .enumerate()
+                .map(
+                    |(i, x): (usize, Property<D>)|
+                    ArrayItem::new(i as i32, From::from(x.key()))
+                ).collect();
+            Ok(vec![From::from(out)])
         },
         _ => Err(Error::Op(None, format!("{:?} not iterable", dt))),
     }
@@ -678,19 +679,19 @@ fn builtin_has<D>(args: &mut Vec<Thunk>, doc: D, c: &mut Context<D>)
     let dt = doc.doctype();
     match dt {
         Doctype::Array => {
-            let f = |x: <D as DocIterator<i32,D>>::Item| -> bool {
-                let value = x.value();
-                if value == item { true } else { false }
-            };
-            let out = <D as DocIterator<i32,D>>::any(doc, f).unwrap();
+            let out = <D as DocIterator<i32,D>>::iter(&doc).unwrap()
+                .any(|x: &ArrayItem<D>| {
+                    let value = x.value_ref();
+                    if value == &item { true } else { false }
+                });
             Ok(vec![From::from(out)])
         },
         Doctype::Object => {
-            let f = |x : <D as DocIterator<String,D>>::Item| -> bool {
-                let key: D = From::from(x.key());
-                if key == item { true } else { false }
-            };
-            let out = <D as DocIterator<String,D>>::any(doc, f).unwrap();
+            let out = <D as DocIterator<String,D>>::iter(&doc).unwrap()
+                .any(|x: &Property<D>| {
+                    let key: D = From::from(x.key_ref().clone());
+                    if key == item { true } else { false }
+                });
             Ok(vec![From::from(out)])
         },
         _ => Err(Error::Op(None, format!("{:?} not iterable", dt))),
@@ -705,19 +706,19 @@ fn builtin_indoc<D>(args: &mut Vec<Thunk>, item: D, c: &mut Context<D>)
     let dt = doc.doctype();
     match dt {
         Doctype::Array => {
-            let f = |x :<D as DocIterator<i32,D>>::Item| -> bool {
-                let value = x.value();
-                if value == item { true } else { false }
-            };
-            let out = <D as DocIterator<i32,D>>::any(doc, f).unwrap();
+            let out = <D as DocIterator<i32,D>>::iter(&doc).unwrap()
+                .any(|x| {
+                    let value = x.value_ref();
+                    if value == &item { true } else { false }
+                });
             Ok(vec![From::from(out)])
         },
         Doctype::Object => {
-            let f = |x :<D as DocIterator<String,D>>::Item| -> bool {
-                let key: D = From::from(x.key());
-                if key == item { true } else { false }
-            };
-            let out = <D as DocIterator<String,D>>::any(doc, f).unwrap();
+            let out = <D as DocIterator<String,D>>::iter(&doc).unwrap()
+                .any(|x| {
+                    let key: D = From::from(x.key_ref().clone());
+                    if key == item { true } else { false }
+                });
             Ok(vec![From::from(out)])
         },
         _ => Err(Error::Op(None, format!("{:?} not iterable", dt))),
@@ -733,23 +734,16 @@ fn builtin_map<D>(args: &mut Vec<Thunk>, doc: D, c: &mut Context<D>)
     match dt {
         Doctype::String | Doctype::Array => {
             let mut out = Vec::new();
-            let f: fn(<D as DocIterator<i32,D>>::Item) -> D = |x| {
-                x.value()
-            };
-            for val in <D as DocIterator<i32,D>>::map(doc, f).unwrap() {
-                out.push(thunk(val, c)?.remove(0));
+            for item in <D as DocIterator<i32,D>>::into_iter(doc).unwrap() {
+                out.push(thunk(item.value(), c)?.remove(0));
             }
             Ok(vec![From::from(out)])
         },
         Doctype::Object => {
             let mut out = Vec::new();
-            let f: fn(<D as DocIterator<String,D>>::Item) -> D = |x| {
-                From::from(vec![From::from(x.key_ref().clone()), x.value()])
-            };
-            for arr in <D as DocIterator<String,D>>::map(doc, f).unwrap() {
-                let key = arr.index_ref(0).unwrap().clone().string().unwrap();
-                let val = arr.index(1).unwrap();
-                out.push(Property::new(key, thunk(val, c)?.remove(0)))
+            for item in <D as DocIterator<String,D>>::into_iter(doc).unwrap() {
+                let key = item.key_ref().clone();
+                out.push(Property::new(key, thunk(item.value(), c)?.remove(0)));
             }
             Ok(vec![From::from(out)])
         },
@@ -765,24 +759,24 @@ fn builtin_any<D>(args: &mut Vec<Thunk>, doc: D, c: &mut Context<D>)
     let dt = doc.doctype();
     match dt {
         Doctype::String | Doctype::Array => {
-            let f =  |x: <D as DocIterator<i32,D>>::Item| -> bool {
-                thunk(x.value(), c).map(
-                    |mut x| x.remove(0).boolean().unwrap_or(false)
-                ).unwrap_or(false)
-            };
-            let out = <D as DocIterator<i32,D>>::any(doc, f).unwrap();
-            Ok(vec![From::from(out)])
+            for item in <D as DocIterator<i32,D>>::into_iter(doc).unwrap() {
+                let out = thunk(item.value(), c)?.remove(0);
+                if out.boolean().unwrap_or(false) {
+                    return Ok(vec![From::from(true)])
+                }
+            }
+            return Ok(vec![From::from(false)])
         },
         Doctype::Object => {
-            let f = |x: <D as DocIterator<String,D>>::Item| -> bool {
-                thunk(x.value(), c).map(
-                    |mut x| x.remove(0).boolean().unwrap_or(false)
-                ).unwrap_or(false)
-            };
-            let out = <D as DocIterator<String,D>>::any(doc, f).unwrap();
-            Ok(vec![From::from(out)])
+            for item in <D as DocIterator<String,D>>::into_iter(doc).unwrap() {
+                let out = thunk(item.value(), c)?.remove(0);
+                if out.boolean().unwrap_or(false) {
+                    return Ok(vec![From::from(true)])
+                }
+            }
+            return Ok(vec![From::from(false)])
         },
-        _ => Err(Error::Op(None, format!("cannot map over {:?}", dt))),
+        _ => Err(Error::Op(None, format!("cannot iterate over {:?}", dt))),
     }
 }
 
@@ -794,24 +788,24 @@ fn builtin_all<D>(args: &mut Vec<Thunk>, doc: D, c: &mut Context<D>)
     let dt = doc.doctype();
     match dt {
         Doctype::String | Doctype::Array => {
-            let f = |x: <D as DocIterator<i32,D>>::Item| -> bool {
-                thunk(x.value(), c).map(
-                    |mut x| x.remove(0).boolean().unwrap_or(false)
-                ).unwrap_or(false)
-            };
-            let out = <D as DocIterator<i32,D>>::all(doc, f).unwrap();
-            Ok(vec![From::from(out)])
+            for item in <D as DocIterator<i32,D>>::into_iter(doc).unwrap() {
+                let out = thunk(item.value(), c)?.remove(0);
+                if out.boolean().unwrap_or(false) == false {
+                    return Ok(vec![From::from(false)])
+                }
+            }
+            return Ok(vec![From::from(true)])
         },
         Doctype::Object => {
-            let f = |x: <D as DocIterator<String,D>>::Item| -> bool {
-                thunk(x.value(), c).map(
-                    |mut x| x.remove(0).boolean().unwrap_or(false)
-                ).unwrap_or(false)
-            };
-            let out = <D as DocIterator<String,D>>::all(doc, f).unwrap();
-            Ok(vec![From::from(out)])
+            for item in <D as DocIterator<String,D>>::into_iter(doc).unwrap() {
+                let out = thunk(item.value(), c)?.remove(0);
+                if out.boolean().unwrap_or(false) == false {
+                    return Ok(vec![From::from(false)])
+                }
+            }
+            return Ok(vec![From::from(true)])
         },
-        _ => Err(Error::Op(None, format!("cannot map over {:?}", dt))),
+        _ => Err(Error::Op(None, format!("cannot iterate over {:?}", dt))),
     }
 }
 
@@ -819,12 +813,12 @@ fn docvalues<D>(doc: D) -> Option<Vec<D>> where D: Document {
     let dt = doc.doctype();
     match dt {
         Doctype::Array => {
-            let f: fn(<D as DocIterator<i32,D>>::Item) -> D = |x| x.value();
-            Some(<D as DocIterator<i32,D>>::map(doc, f).unwrap())
+            let iter = <D as DocIterator<i32,D>>::into_iter(doc).unwrap();
+            Some(iter.map(|x| x.value()).collect())
         },
         Doctype::Object => {
-            let f: fn(<D as DocIterator<String,D>>::Item) -> D = |x| x.value();
-            Some(<D as DocIterator<String,D>>::map(doc, f).unwrap())
+            let iter = <D as DocIterator<String,D>>::into_iter(doc).unwrap();
+            Some(iter.map(|x| x.value()).collect())
         },
         _ => None
     }
