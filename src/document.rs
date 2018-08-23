@@ -21,7 +21,7 @@ pub enum Doctype {
 
 pub trait Document :
     From<bool> + From<i128> + From<f64> + From<String> +
-    From<Vec<Self>> + From<Vec<ArrayItem<Self>>> + From<Vec<Property<Self>>> +
+    From<Vec<Self>> + From<Vec<Property<Self>>> +
     fmt::Debug + Default + Clone +
     Neg<Output=Self> + Not<Output=Self> +
     Mul<Output=Self> + Div<Output=Self> + Rem<Output=Self> +
@@ -30,7 +30,7 @@ pub trait Document :
     BitAnd<Output=Self> + BitXor<Output=Self> + BitOr<Output=Self> +
     PartialEq + PartialOrd +
     And<Output=Self> + Or<Output=Self> + Docindex<isize> +
-    Recurse + Slice + DocIterator<i32,Self> + DocIterator<String,Self> {
+    Recurse + Slice + DocIterator<Self> + DocIterator<Property<Self>> {
 
     type Err: Into<query::Error> + fmt::Debug;
 
@@ -42,11 +42,11 @@ pub trait Document :
 
     fn string(self) -> Option<String>;
 
+    fn len(self) -> Option<usize>;
+
     fn get<'a>(self, key: &'a str) -> Option<Self>;
 
     fn get_ref<'a>(&self, key: &'a str) -> Option<&Self>;
-
-    fn len(self) -> Option<Self>;
 }
 
 pub trait And<Rhs=Self> {
@@ -78,12 +78,11 @@ pub trait Slice : Sized {
     fn slice(self, start: isize, end: isize) -> Option<Self>;
 }
 
-pub trait DocIterator<K,D> where K: PartialOrd, D: Document {
-    type Item: Docitem<K,D>;
+pub trait DocIterator<T> {
 
-    fn iter(&self) -> Option<slice::Iter<KeyValue<K,D>>>;
+    fn iter(&self) -> Option<slice::Iter<T>>;
 
-    fn into_iter(self) -> Option<vec::IntoIter<KeyValue<K,D>>>;
+    fn into_iter(self) -> Option<vec::IntoIter<T>>;
 }
 
 pub trait Docitem<K,D> where K: PartialOrd, D: Document {
@@ -144,7 +143,7 @@ impl<K,D> Docitem<K,D> for KeyValue<K,D> where K : PartialOrd, D: Document {
 }
 
 
-pub type ArrayItem<D> = KeyValue<i32,D>;
+pub type ArrayItem<D> = KeyValue<usize,D>;
 
 impl<D> Eq for ArrayItem<D> where D: Document {}
 

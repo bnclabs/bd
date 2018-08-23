@@ -372,8 +372,7 @@ fn decode_json_hex_code2(chars: &mut CharIndices, lex: &mut Lex)
 pub(super) fn parse_array(text: &str, lex: &mut Lex) -> Result<Json> {
     lex.incr_col(1); // skip '['
 
-    let mut array: Vec<ArrayItem> = Vec::new();
-    let mut index = 0;
+    let mut array: Vec<Json> = Vec::new();
     parse_whitespace(text, lex);
     if (&text[lex.off..]).as_bytes()[0] == b',' {
         return Err(Error::Parse(lex.format("expected ','")))
@@ -384,8 +383,7 @@ pub(super) fn parse_array(text: &str, lex: &mut Lex) -> Result<Json> {
             break Ok(Json::Array(array))
         }
 
-        array.push(ArrayItem::new(index, parse_value(text, lex)?));
-        index += 1;
+        array.push(parse_value(text, lex)?);
 
         parse_whitespace(text, lex);
         if (&text[lex.off..]).as_bytes()[0] == b',' { // skip comma
@@ -472,7 +470,6 @@ fn check_eof(text: &str, lex: &mut Lex) -> Result<()> {
 
 type Property = document::Property<Json>;
 
-type ArrayItem = document::ArrayItem<Json>;
 
 
 #[derive(Clone,PartialEq,PartialOrd)]
@@ -482,7 +479,7 @@ pub enum Json {
     Integer(i128),
     Float(f64),
     String(String),
-    Array(Vec<ArrayItem>),
+    Array(Vec<Json>),
     Object(Vec<Property>),
 }
 
@@ -528,7 +525,7 @@ impl Json {
             val@Float(_) | val@S(_) => list.push(val.clone()),
             Array(val) => {
                 list.push(Array(val.clone()));
-                val.iter().for_each(|item| item.value_ref().do_recurse(list))
+                val.iter().for_each(|item| item.do_recurse(list))
             },
             Object(val) => {
                 list.push(Object(val.clone()));
@@ -570,21 +567,13 @@ impl From<String> for Json {
 
 impl From<Vec<Json>> for Json {
     fn from(val: Vec<Json>) -> Json {
-        let a = val.into_iter()
-            .enumerate().map(|(i,x)| ArrayItem::new(i as i32, x));
-        Json::Array(a.collect())
+        Json::Array(val)
     }
 }
 
 impl From<Vec<Property>> for Json {
     fn from(val: Vec<Property>) -> Json {
         Json::Object(val)
-    }
-}
-
-impl From<Vec<ArrayItem>> for Json {
-    fn from(val: Vec<ArrayItem>) -> Json {
-        Json::Array(val)
     }
 }
 
@@ -621,9 +610,9 @@ impl fmt::Display for Json {
                 } else {
                     write!(f, "[")?;
                     for item in val[..val.len()-1].iter() {
-                        write!(f, "{},", item.value_ref())?;
+                        write!(f, "{},", item)?;
                     }
-                    write!(f, "{}", val[val.len()-1].value_ref())?;
+                    write!(f, "{}", val[val.len()-1])?;
                     write!(f, "]")
                 }
             },
@@ -699,12 +688,12 @@ impl Document for Json {
         }
     }
 
-    fn len(self) -> Option<Json> {
+    fn len(self) -> Option<usize> {
         match self {
-            Json::String(s) => Some(Json::Integer(s.len() as i128)),
-            Json::Array(a) => Some(Json::Integer(a.len() as i128)),
-            Json::Object(o) => Some(Json::Integer(o.len() as i128)),
-            Json::Null => Some(Json::Integer(0)),
+            Json::String(s) => Some(s.len()),
+            Json::Array(a) => Some(a.len()),
+            Json::Object(o) => Some(o.len()),
+            Json::Null => Some(0),
             _ => None,
         }
     }
@@ -714,7 +703,7 @@ impl Docindex<isize> for Json {
     fn index(self, off: isize) -> Option<Json> {
         match self {
             Json::Array(a) => {
-                Some(a[util::normalized_offset(off, a.len())?].clone().value())
+                Some(a[util::normalized_offset(off, a.len())?].clone())
             }
             _ => None
         }
@@ -723,7 +712,7 @@ impl Docindex<isize> for Json {
     fn index_ref(&self, off: isize) -> Option<&Json> {
         match self {
             Json::Array(a) => {
-                Some(&a[util::normalized_offset(off, a.len())?].value_ref())
+                Some(&a[util::normalized_offset(off, a.len())?])
             }
             _ => None
         }
@@ -733,41 +722,37 @@ impl Docindex<isize> for Json {
         match self {
             Json::Array(a) => {
                 let off = util::normalized_offset(off, a.len())?;
-                Some(a[off].value_mut())
-            }
+                Some(&mut a[off])
+            },
             _ => None
         }
     }
 }
 
-impl DocIterator<i32,Json> for Json {
-    type Item=ArrayItem;
+impl DocIterator<Json> for Json {
 
-    fn iter(&self) -> Option<slice::Iter<ArrayItem>> {
+    fn iter(&self) -> Option<slice::Iter<Json>> {
         match self {
             Json::Array(arr) => Some(arr.iter()),
             _ => None
         }
     }
 
-    fn into_iter(self) -> Option<vec::IntoIter<ArrayItem>> {
+    fn into_iter(self) -> Option<vec::IntoIter<Json>> {
         match self {
             Json::String(s) => {
-                let arr: Vec<ArrayItem> = s.chars().enumerate()
-                    .map(
-                        |(i,ch)|
-                        ArrayItem::new(i as i32, Json::Integer(ch as i128))
-                    ).collect();
-                Some(arr.into_iter())
-            }
+                let out: Vec<Json> = s.chars().into_iter()
+                    .map(|x| Json::Integer(x as i128))
+                    .collect();
+                Some(out.into_iter())
+            },
             Json::Array(arr) => Some(arr.into_iter()),
             _ => None
         }
     }
 }
 
-impl DocIterator<String,Json> for Json {
-    type Item=Property;
+impl DocIterator<Property> for Json {
 
     fn iter(&self) -> Option<slice::Iter<Property>> {
         match self {
@@ -849,9 +834,7 @@ impl Div for Json {
             (Float(l), Float(r)) => Float(l/r),
             (Float(l), Integer(r)) => Float(l/(r as f64)),
             (S(s), S(patt)) => {
-                let arr = s.split(&patt).enumerate()
-                    .map(|(i, s)| ArrayItem::new(i as i32, S(s.to_string())))
-                    .collect();
+                let arr = s.split(&patt).map(|s| S(s.to_string())).collect();
                 Json::Array(arr)
             },
             (_, _) => Null,
@@ -1151,10 +1134,7 @@ mod tests {
         assert_eq!(Some(Bool(true)), iter.next());
         assert_eq!(Some(Bool(false)), iter.next());
         assert_eq!(
-            Some(Array(vec![
-                ArrayItem::new(0, Integer(1)),
-                ArrayItem::new(1, Integer(2)),
-            ])),
+            Some(Array(vec![Integer(1), Integer(2), ])),
             iter.next()
         );
         assert_eq!(
