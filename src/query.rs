@@ -8,7 +8,7 @@ use nom::{self, {types::CompleteStr as NS}};
 
 use json::{self};
 use query_nom::parse_program_nom;
-use document::{self, Document, Doctype, Docitem, DocIterator, Property};
+use db::{self, Document, Doctype, ItemIterator, Property};
 
 // TODO: Parametrise Thunk over different types of Document.
 // TODO: Better to replace panic with assert!() macro.
@@ -16,11 +16,8 @@ use document::{self, Document, Doctype, Docitem, DocIterator, Property};
 // TODO: ? operator is not consistent and intuitive, a through review
 //       and test cases is required.
 
-type Output<D> = Vec<D>;
-
 
 pub type Result<T> = result::Result<T,Error>;
-
 
 #[derive(Debug,Eq,PartialEq)]
 pub enum Error {
@@ -106,9 +103,9 @@ pub enum Thunk where {
     Identifier(String, bool),
     Slice(isize, isize, bool),
     IterateValues(bool),
-    Iterate(Vec<Thunk>, bool),
-    List(Vec<Thunk>, bool),
-    Dict(Vec<(Thunk, Option<Thunk>)>, bool),
+    Iterate(Vec<Thunk<L>>, bool),
+    List(Vec<Thunk<L>>, bool),
+    Dict(Vec<(Thunk<L>, Option<Thunk<R>>)>, bool),
     // Operations in decreasing precedance
     Neg(Box<Thunk>),
     Not(Box<Thunk>),
@@ -134,6 +131,178 @@ pub enum Thunk where {
     // Builtins
     Builtin(String, Vec<Thunk>),
 }
+
+impl Thunk {
+    pub fn prepare<D,T>(self, input: Input<D>) -> Output<T>
+        where D: Document, T: Document
+    {
+        use query::Thunk::*;
+
+        match self {
+            Empty(input) | Identity(input) => {
+                OpIdentity::new(input, T::default())
+            },
+            Recurse(input) => OpRecurse::new(input, T::default()),
+            Null(input, opt) => OpNull::new(input, T::default()),
+            Bool(input, value, opt) => OpBool::new(input, value, opt),
+            Integer(input, value, opt) => OpInteger::new(input, value, opt),
+            Float(input, value, opt) => OpFloat::new(input, value, opt),
+            String(input, value, opt) => OpString::new(input, value, opt),
+
+            IndexShortcut(input, s, n, opt) => {
+                OpIndexShortcut::new(input, s, n, opt)
+            },
+            Identifier(_, s, opt) => Identifier(input, s, opt),
+            Slice(_, a, b, opt) => Slice(input, a, b, opt),
+            IterateValues(_, opt) => IterateValues(input, opt),
+            Iterate(_, ts, opt) => Iterate(input, ts, opt),
+            List(_, ts, opt) => List(input, ts, opt),
+            Dict(_, ts, opt) => Dict(input, ts, opt),
+
+            Neg(_, o) => Neg(input, o),
+            Not(_, o) => Not(input, o),
+            Mult(_, l, r) => Mult(input, l, r),
+            Div(_, l, r) => Div(input, l, r),
+            Rem(_, l, r) => Rem(input, l, r),
+            Add(_, l, r) => Add(input, l, r),
+            Sub(_, l, r) => Sub(input, l, r),
+            Eq(_, l, r) => Eq(input, l, r),
+            Ne(_, l, r) => Ne(input, l, r),
+            Lt(_, l, r) => Lt(input, l, r),
+            Le(_, l, r) => Le(input, l, r),
+            Gt(_, l, r) => Gt(input, l, r),
+            Ge(_, l, r) => Ge(input, l, r),
+            Shr(_, l, r) => Shr(input, l, r),
+            Shl(_, l, r) => Shl(input, l, r),
+            BitAnd(_, l, r) => BitAnd(input, l, r),
+            BitXor(_, l, r) => BitXor(input, l, r),
+            BitOr(_, l, r) => BitOr(input, l, r),
+            And(_, l, r) => And(input, l, r),
+            Or(_, l, r) => Or(input, l, r),
+            Pipe(_, l, r) => Pipe(input, l, r),
+
+            Builtin(_, f, args) => Builtin(input, f, args),
+        }
+    }
+
+    pub fn into_iter(self) -> Output {
+        match self {
+            val@Empty(_) => val,
+            val@Identity(_) => val,
+            val@Recurse(_) => val,
+
+            // literal
+            Null(_) => {
+                Ok(vec![D::null()])
+            },
+            Bool(val, _) => {
+                Ok(vec![From::from(*val)])
+            },
+            Integer(val, _) => {
+                Ok(vec![From::from(*val)])
+            },
+            Float(val, _) => {
+                Ok(vec![From::from(*val)])
+            },
+            String(val, _) => {
+                Ok(vec![From::from(val.clone())])
+            },
+
+
+            IndexShortcut(key, off, opt) => { // vector of single item
+                let res: Result<Output<D>>;
+                if key.is_some() {
+                    res = do_get_shortcut(key.as_ref().unwrap().as_str(), doc, c);
+                } else {
+                    res = do_index_shortcut(off.unwrap(), doc, c);
+                }
+                if *opt && res.is_err() { Ok(vec![]) } else { Ok(res?) }
+            },
+
+            Identifier(symbol, opt) => {
+                let res = do_identifier(symbol, doc, c);
+                if *opt && res.is_err() { Ok(vec![]) } else { Ok(res?) }
+            },
+
+            Slice(start, end, opt) => { // vector of one or more
+                use query::Error::Op;
+
+                let res = doc
+                    .slice(*start, *end)
+                    .ok_or_else( || Op(None, "doc not an array".to_string()));
+                if *opt && res.is_err() { Ok(vec![]) } else { Ok(vec![res?]) }
+            },
+
+            IterateValues(opt) => {
+                let res = do_iterate_values(doc, c);
+                if *opt && res.is_err() { Ok(vec![]) } else { Ok(res?) }
+            },
+
+            Iterate(ref mut thunks, opt) => {
+                let res = do_iterate(thunks, *opt, doc, c);
+                if *opt && res.is_err() { Ok(vec![]) } else { Ok(res?) }
+            },
+
+            List(ref mut thunks, opt) => do_list(thunks, *opt, doc, c),
+            Dict(ref mut kv_thunks, opt) => do_dict(kv_thunks, *opt, doc, c),
+
+            Neg(ref mut thunk) => do_neg(thunk, doc, c),
+            Not(ref mut thunk) => do_not(thunk, doc, c),
+
+            Mult(ref mut ltnk, ref mut rtnk) => do_mul(ltnk, rtnk, doc, c),
+            Div(ref mut ltnk, ref mut rtnk) => do_div(ltnk, rtnk, doc, c),
+            Rem(ref mut ltnk, ref mut rtnk) => do_rem(ltnk, rtnk, doc, c),
+
+            Add(ref mut ltnk, ref mut rtnk) => do_add(ltnk, rtnk, doc, c),
+            Sub(ref mut ltnk, ref mut rtnk) => do_sub(ltnk, rtnk, doc, c),
+
+            Eq(ref mut ltnk, ref mut rtnk) => do_eq(ltnk, rtnk, doc, c),
+            Ne(ref mut ltnk, ref mut rtnk) => do_ne(ltnk, rtnk, doc, c),
+            Lt(ref mut ltnk, ref mut rtnk) => do_lt(ltnk, rtnk, doc, c),
+            Le(ref mut ltnk, ref mut rtnk) => do_le(ltnk, rtnk, doc, c),
+            Gt(ref mut ltnk, ref mut rtnk) => do_gt(ltnk, rtnk, doc, c),
+            Ge(ref mut ltnk, ref mut rtnk) => do_ge(ltnk, rtnk, doc, c),
+
+            Shr(ref mut ltnk, ref mut rtnk) => do_shr(ltnk, rtnk, doc, c),
+            Shl(ref mut ltnk, ref mut rtnk) => do_shl(ltnk, rtnk, doc, c),
+            BitAnd(ref mut ltnk, ref mut rtnk) => do_bitand(ltnk, rtnk, doc, c),
+            BitXor(ref mut ltnk, ref mut rtnk) => do_bitxor(ltnk, rtnk, doc, c),
+            BitOr(ref mut ltnk, ref mut rtnk) => do_bitor(ltnk, rtnk, doc, c),
+
+            And(ref mut ltnk, ref mut rtnk) => do_and(ltnk, rtnk, doc, c),
+            Or(ref mut ltnk, ref mut rtnk) => do_or(ltnk, rtnk, doc, c),
+
+            Pipe(ref mut ltnk, ref mut rtnk) => do_pipe(ltnk, rtnk, doc, c),
+
+            Builtin(funcname, ref mut args) => {
+                if let Some(func) = c.get_name(funcname) {
+                    func(args, doc, c)
+                } else {
+                    Err(Error::InvalidFunction(format!("{}", funcname)))
+                }
+            },
+        }
+}
+
+impl DocIterator for Thunk {
+    type Item=DBItem;
+
+    pub fn next(&mut self, c: &mut Context) -> Option<DBItem> {
+        use query::Thunk::*;
+
+        match self {
+            Empty(input) | Identity(input) => input.next(),
+            Recurse(input) => {
+                let doc = input.next()?;
+                doc.recurse()
+            Recurse => { // vector of one or more items
+                Ok(doc.recurse())
+            },
+
+        }
+    }
+}
+
 
 impl FromStr for Thunk {
     type Err=Error;
@@ -269,28 +438,6 @@ impl<'a, D> FnOnce<(D, &'a mut Context<D>)> for Thunk where D:Document {
     }
 }
 
-fn do_get_shortcut<D>(key: &str, doc: D, _: &mut Context<D>)
-    -> Result<Output<D>> where D: Document
-{
-    if let Some(val) = doc.get_ref(key) {
-        Ok(vec![val.clone()])
-    } else {
-        let dt = doc.doctype();
-        Err(Error::Op(None, format!("cannot index {} into {:?}", key, dt)))
-    }
-}
-
-fn do_index_shortcut<D>(off: isize, doc: D, _: &mut Context<D>)
-    -> Result<Output<D>> where D: Document
-{
-    if let Some(val) = doc.index_ref(off) {
-        Ok(vec![val.clone()])
-    } else {
-        let dt = doc.doctype();
-        Err(Error::Op( None, format!("cannot index {} into {:?}", off, dt)))
-    }
-}
-
 fn do_identifier<D>(symbol: &str, doc: D, c: &mut Context<D>)
     -> Result<Output<D>> where D: Document
 {
@@ -384,7 +531,7 @@ fn do_dict<D>(
         for (kvs, mut dicts) in z {
             for dict in dicts.iter_mut() {
                 kvs.clone().into_iter().for_each(
-                    |kv| document::upsert_object_key(dict, kv)
+                    |kv| db::upsert_object_key(dict, kv)
                 );
             }
             next_dicts.append(&mut dicts);
@@ -670,12 +817,12 @@ fn builtin_has<D>(args: &mut Vec<Thunk>, doc: D, c: &mut Context<D>)
     let dt = doc.doctype();
     match dt {
         Doctype::Array => {
-            let out = <D as DocIterator<D>>::iter(&doc).unwrap()
+            let out = <D as ItemIterator<D>>::iter(&doc).unwrap()
                 .any(|value: &D| value == &item);
             Ok(vec![From::from(out)])
         },
         Doctype::Object => {
-            let out = <D as DocIterator<Property<D>>>::iter(&doc).unwrap()
+            let out = <D as ItemIterator<Property<D>>>::iter(&doc).unwrap()
                 .any(|x| {
                     let key: D = From::from(x.key_ref().clone());
                     key == item
@@ -694,12 +841,12 @@ fn builtin_indoc<D>(args: &mut Vec<Thunk>, item: D, c: &mut Context<D>)
     let dt = doc.doctype();
     match dt {
         Doctype::Array => {
-            let out = <D as DocIterator<D>>::iter(&doc).unwrap()
+            let out = <D as ItemIterator<D>>::iter(&doc).unwrap()
                 .any(|value: &D| value == &item);
             Ok(vec![From::from(out)])
         },
         Doctype::Object => {
-            let out = <D as DocIterator<Property<D>>>::iter(&doc).unwrap()
+            let out = <D as ItemIterator<Property<D>>>::iter(&doc).unwrap()
                 .any(|x| {
                     let key: D = From::from(x.key_ref().clone());
                     key == item
@@ -719,14 +866,14 @@ fn builtin_map<D>(args: &mut Vec<Thunk>, doc: D, c: &mut Context<D>)
     match dt {
         Doctype::String | Doctype::Array => {
             let mut out = Vec::new();
-            for value in <D as DocIterator<D>>::into_iter(doc).unwrap() {
+            for value in <D as ItemIterator<D>>::into_iter(doc).unwrap() {
                 out.push(thunk(value, c)?.remove(0));
             }
             Ok(vec![From::from(out)])
         },
         Doctype::Object => {
             let mut out = Vec::new();
-            for x in <D as DocIterator<Property<D>>>::into_iter(doc).unwrap() {
+            for x in <D as ItemIterator<Property<D>>>::into_iter(doc).unwrap() {
                 let key = x.key_ref().clone();
                 out.push(Property::new(key, thunk(x.value(), c)?.remove(0)));
             }
@@ -744,7 +891,7 @@ fn builtin_any<D>(args: &mut Vec<Thunk>, doc: D, c: &mut Context<D>)
     let dt = doc.doctype();
     match dt {
         Doctype::String | Doctype::Array => {
-            for value in <D as DocIterator<D>>::into_iter(doc).unwrap() {
+            for value in <D as ItemIterator<D>>::into_iter(doc).unwrap() {
                 let out = thunk(value, c)?.remove(0);
                 if out.boolean().unwrap_or(false) {
                     return Ok(vec![From::from(true)])
@@ -753,7 +900,7 @@ fn builtin_any<D>(args: &mut Vec<Thunk>, doc: D, c: &mut Context<D>)
             return Ok(vec![From::from(false)])
         },
         Doctype::Object => {
-            for x in <D as DocIterator<Property<D>>>::into_iter(doc).unwrap() {
+            for x in <D as ItemIterator<Property<D>>>::into_iter(doc).unwrap() {
                 let out = thunk(x.value(), c)?.remove(0);
                 if out.boolean().unwrap_or(false) {
                     return Ok(vec![From::from(true)])
@@ -773,7 +920,7 @@ fn builtin_all<D>(args: &mut Vec<Thunk>, doc: D, c: &mut Context<D>)
     let dt = doc.doctype();
     match dt {
         Doctype::String | Doctype::Array => {
-            for value in <D as DocIterator<D>>::into_iter(doc).unwrap() {
+            for value in <D as ItemIterator<D>>::into_iter(doc).unwrap() {
                 let out = thunk(value, c)?.remove(0);
                 if out.boolean().unwrap_or(false) == false {
                     return Ok(vec![From::from(false)])
@@ -782,7 +929,7 @@ fn builtin_all<D>(args: &mut Vec<Thunk>, doc: D, c: &mut Context<D>)
             return Ok(vec![From::from(true)])
         },
         Doctype::Object => {
-            for x in <D as DocIterator<Property<D>>>::into_iter(doc).unwrap() {
+            for x in <D as ItemIterator<Property<D>>>::into_iter(doc).unwrap() {
                 let out = thunk(x.value(), c)?.remove(0);
                 if out.boolean().unwrap_or(false) == false {
                     return Ok(vec![From::from(false)])
@@ -798,11 +945,11 @@ fn docvalues<D>(doc: D) -> Option<Vec<D>> where D: Document {
     let dt = doc.doctype();
     match dt {
         Doctype::Array => {
-            let iter = <D as DocIterator<D>>::into_iter(doc).unwrap();
+            let iter = <D as ItemIterator<D>>::into_iter(doc).unwrap();
             Some(iter.collect())
         },
         Doctype::Object => {
-            let iter = <D as DocIterator<Property<D>>>::into_iter(doc).unwrap();
+            let iter = <D as ItemIterator<Property<D>>>::into_iter(doc).unwrap();
             Some(iter.map(|x| x.value()).collect())
         },
         _ => None
@@ -838,52 +985,6 @@ fn assert_singular<D>(outs: &Output<D>) -> Result<()> where D: Document {
 
 pub type Callable<D>
     = fn(&mut Vec<Thunk>, D, &mut Context<D>) -> Result<Output<D>>;
-
-#[derive(Clone)]
-pub struct Context<D> where D: Document {
-    namespace: HashMap<String, Callable<D>>,
-}
-
-impl<D> Context<D> where D: Document {
-    pub fn new() -> Context<D> {
-        let namespace = HashMap::with_capacity(64);
-        let mut c = Context{namespace};
-        c.set_name("length", builtin_length);
-        c.set_name("chars", builtin_chars);
-        c.set_name("keys", builtin_keys);
-        c.set_name("has", builtin_has);
-        c.set_name("in", builtin_indoc);
-        c.set_name("map", builtin_map);
-        c.set_name("any", builtin_any);
-        c.set_name("all", builtin_all);
-        c
-    }
-
-    //fn mixin_namespace(&mut self, context: &Context<D>) {
-    //    for (k, v) in context.namespace.iter() {
-    //        self.namespace.insert(k.to_string(), v.clone());
-    //    }
-    //}
-
-    fn get_name(&self, name: &str) -> Option<Callable<D>> {
-        self.namespace.get(name).cloned()
-    }
-
-    pub fn set_name(&mut self, name: &str, value: Callable<D>) {
-        self.namespace.insert(name.to_string(), value);
-    }
-
-    //fn del_name(&mut self, name: &str) {
-    //    self.namespace.remove(name);
-    //}
-
-    pub fn eval(&mut self, thunk: &mut Thunk, doc: D)
-        -> Result<Output<D>> where D: Document
-    {
-        thunk(doc, self)
-    }
-}
-
 
 
 // TODO: add the optional variant ``?`` for each test case.

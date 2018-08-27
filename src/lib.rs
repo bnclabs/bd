@@ -14,10 +14,13 @@ extern crate regex;
 #[macro_use] extern crate nom;
 
 
-pub mod json;
 pub mod query;
+pub mod context;
+pub mod db;
+pub mod entry;
+pub mod json;
 mod query_nom;
-mod document;
+mod ops;
 mod lex;
 mod util;
 

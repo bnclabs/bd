@@ -623,7 +623,7 @@ named!(nom_primary_expr(NS) -> Thunk,
 
 fn nom_empty_program(text: NS) -> nom::IResult<NS, Thunk> {
     if text.len() == 0 {
-        return Ok((NS(&text[..]), Thunk::Empty))
+        return Ok((NS(&text[..]), Thunk::Empty(Box::new(PanicIter{}))))
     }
     let ctxt = nom::Context::Code(text, nom::ErrorKind::Custom(0));
     return Err(nom::Err::Error(ctxt))
@@ -731,4 +731,14 @@ fn check_next_byte(text: NS, b: u8) -> nom::IResult<NS, ()> {
 
 pub fn parse_program_nom<'a>(s: NS<'a>) -> IResult<NS<'a>, Thunk> {
     nom_program(s)
+}
+
+struct PanicIter {}
+
+impl Iterator for PanicIter {
+    type Item=bool;
+
+    fn next(&mut self) -> Option<bool> {
+        panic!("cannot call this place holder iterator");
+    }
 }
