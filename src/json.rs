@@ -539,6 +539,12 @@ impl From<String> for Json {
     }
 }
 
+impl From<&str> for Json {
+    fn from(val: &str) -> Json {
+        Json::String(val.to_string())
+    }
+}
+
 impl From<Vec<Json>> for Json {
     fn from(val: Vec<Json>) -> Json {
         Json::Array(val)
@@ -732,6 +738,15 @@ impl Docindex<isize> for Json {
         }
     }
 
+    fn get_mut<'a>(&mut self, key: &'a str) -> Option<&mut Json> {
+        match self {
+            Json::Object(obj) => {
+                let off = search_by_key(obj, key).ok()?;
+                Some(obj[off].value_mut())
+            }
+            _ => None,
+        }
+    }
 }
 
 impl ItemIterator<Json> for Json {
@@ -788,10 +803,10 @@ impl Slice for Json {
     }
 }
 
-impl Append<String> for Json {
-    fn append(&mut self, value: String) {
+impl Append<&str> for Json {
+    fn append(&mut self, value: &str) {
         match self {
-            Json::String(s) => s.push_str(&value),
+            Json::String(s) => s.push_str(value),
             _ => panic!("cannot append to {:?}", self.doctype()),
         }
     }

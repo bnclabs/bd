@@ -27,9 +27,9 @@ impl<D,T> DocIterator for OpIdentity<D,T>
     type Item=Entry<T>;
 
     fn next(&mut self, c: &mut Context) -> Option<Entry<T>> {
-        let entry = self.input.next(c)?;
-        if entry.has_error() { Some(From::from(entry)) }
-        Some(From::from(self.input.next(c)?))
+        let t_entry = From::from(self.input.next(c)?);
+        t_entry.op_append("op", "identity ")
+        Some(t_entry)
     }
 }
 
@@ -60,21 +60,25 @@ impl<D,T> DocIterator for OpRecurse<D,T> {
     type Item=Entry<T>;
 
     fn next(&mut self, c: &mut Context) -> Option<Entry<T>> {
-        if let Some(iter) = self.iter {
-            if let Some(item) = iter.next() {
-                return Some(From::from(item))
-            }
+        if let None = self.iter {
+            let d_entry = self.input.next(c)?;
+            if d_entry.has_error() { return Some(From::from(d_entry)) }
+            self.iter = d_entry.recurse().into_iter();
         }
 
-        let entry = self.input.next(c)?;
-        if entry.has_error() { Some(From::from(entry)) }
-
-        let self.iter = Some(entry.recurse().into_iter());
-        Some(From::from(self.iter.next()?))
-    }
-
-    fn clone(&self) -> OpIdentity {
-        OpRecurse{input: self.input.clone(), _data: self._data}
+        let entry = loop {
+            match self.iter.unwrap().next() {
+                Some(entry) => break entry;
+                None = {
+                    let d_entry = self.input.next(c)?;
+                    if d_entry.has_error() { return Some(From::from(d_entry)) }
+                    self.iter = Some(d_entry.recurse().into_iter());
+                }
+            }
+        }
+        let t_entry = From::from(entry);
+        t_entry.op_append("op", "recurse ")
+        return Some(t_entry);
     }
 }
 
@@ -100,10 +104,16 @@ impl<D,T> DocIterator for OpNull<D,T> {
     type Item=Entry<T>;
 
     fn next(&mut self, c: &mut Context) -> Option<Entry<T>> {
-        let entry = self.input.next(c)?;
-        if entry.has_error() { Some(From::from(entry)) }
+        let d_entry = self.input.next(c)?;
+        if d_entry.has_error() {
+            Some(From::from(d_entry))
 
-        Some(From::from(Entry::new_with_meta(entry.meta, D::null())))
+        } else {
+            let d_entry = D::null();
+            let t_entry = From::from(Entry::new_with_meta(entry.meta, d_entry));
+            t_entry.op_append("op", "recurse ")
+            Some(t_entry)
+        }
     }
 }
 
@@ -290,20 +300,20 @@ impl<D,T> DocIterator for OpIndexShortcut<D,T> {
                 Ok(doc) => doc,
                 Err(s) => { meta.set_error(s); D::null() }
             }
-            (doc, format!(r#"."{}""#, key))
+            (doc, format!(r#"."{}""#, key)) // TODO: optimize allocation
 
         } else if let Some(off) = self.off {
             let doc = match do_index_shortcut(key.as_str(), entry.doc) {
                 Ok(doc) => doc,
                 Err(s) => { c.set_error(s); D::null() }
             }
-            (doc,  format!(".{}", off))
+            (doc,  format!(".{}", off)) // TODO: optimize allocation
 
         } else {
             unreachable!()
         }
         let entry = Entry::new_with_meta(entry.meta, doc);
-        entry.op_append("path", path)
+        entry.op_append("path", &path)
         Some(From::from(entry))
     }
 }

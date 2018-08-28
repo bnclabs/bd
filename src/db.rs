@@ -33,7 +33,7 @@ pub enum Doctype {
 
 
 pub trait Document :
-    From<bool> + From<i128> + From<f64> + From<String> +
+    From<bool> + From<i128> + From<f64> + From<String> + From<&str> +
     From<Vec<Json>> + From<Vec<Property<Json>>> +
     fmt::Debug + Default + Clone +
     PartialEq + PartialOrd +
@@ -50,7 +50,7 @@ pub trait Document :
     And<Rhs=Json,Output=Self> + Or<Rhs=Json,Output=Self> +
     Docindex<isize> +
     ItemIterator<Self> + ItemIterator<Property<Self>> +
-    Append<String> + Append<Vec<Self>> + Append<Vec<Property<Self>>> +
+    Append<&str> + Append<Vec<Self>> + Append<Vec<Property<Self>>> +
 {
 
     type Err: Into<query::Error> + fmt::Debug;
@@ -104,6 +104,8 @@ pub trait Docindex<Idx> : Sized {
     fn get<'a>(self, key: &'a str) -> Option<Self>;
 
     fn get_ref<'a>(&self, key: &'a str) -> Option<&Self>;
+
+    fn get_mut<'a>(&mut self, key: &'a str) -> Option<&mut Self>;
 }
 
 pub trait ItemIterator<T> {

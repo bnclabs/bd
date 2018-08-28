@@ -36,14 +36,12 @@ impl Entry<D> {
         self.op.set(key, value)
     }
 
-    pub fn op_append<'a>(&mut self, key: &str, path: String) {
-        match meta.op_get(key) {
-            Some(mut value) => {
-                value.append(path)
-                meta.op_set("path", value)
-            },
-            None => meta.op_set("path", path),
+    pub fn op_append<V>(&mut self, key: &str, value: V) {
+        let value: D = match self.op.get_mut(key) {
+            Some(v) => v.append(value),
+            None => From::from(value),
         }
+        self.op.op_set(key, value)
     }
 
     pub fn op_get(&self, key: &str) -> Option<D> {
@@ -75,7 +73,8 @@ pub fn do_recurse_json(entry: Entry<Json>, list: &mut Vec<Entry<Json>>) {
             list.push(Entry::new_with_meta(entry.meta, Array(vals.clone())));
             vals.into_iter().enumerate().for_each(|(i, val)| {
                 let entry = Entry::new_with_meta(meta.clone(), val);
-                entry.op_append("path", format!(".{}", i));
+                let p = format!(".{}", i); // TODO: optimized allocation
+                entry.op_append("path", &p);
                 do_recurse_json(entry, list);
             });
         },
@@ -85,7 +84,8 @@ pub fn do_recurse_json(entry: Entry<Json>, list: &mut Vec<Entry<Json>>) {
             props.iter().for_each(|prop| {
                 let key = prop.key_ref().clone();
                 let entry = Entry::new_with_meta(meta.clone(), prop.value());
-                entry.op_append("path", format!(r#"."{}""#, key));
+                let p = format!(r#"."{}""#, key); // TODO: optimize allocation
+                entry.op_append("path", &p);
                 do_recurse_json(entry, list)
             })
         },
