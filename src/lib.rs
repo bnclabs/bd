@@ -14,15 +14,15 @@ extern crate regex;
 #[macro_use] extern crate nom;
 
 
-pub mod query;
-pub mod context;
+//pub mod context;
 pub mod db;
-pub mod entry;
-pub mod json;
-mod query_nom;
-mod ops;
-mod lex;
-mod util;
+//pub mod entry;
+//pub mod json;
+//mod lex;
+//mod ops;
+//pub mod query;
+//mod query_nom;
+//mod util;
 
 #[cfg(test)]
 mod tests {

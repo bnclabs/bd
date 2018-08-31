@@ -508,20 +508,26 @@ named!(nom_primary_collection1(NS) -> (Vec<Thunk>, Option<NS>),
 );
 named!(nom_object_key(NS) -> Thunk,
     alt!(
-        nom_identifier => { |s: NS| Thunk::String((&s).to_string(), false) } |
         nom_json_string => { |s| Thunk::String(s, false) } |
         nom_primary_paran_expr
     )
 );
-named!(nom_collection2_item(NS) -> (Thunk, Option<Thunk>),
-    do_parse!(
-        key: nom_object_key  >>
-             opt!(nom_colon) >>
-        val: opt!(nom_expr)  >>
-        (key, val)
+named!(nom_collection2_item(NS) -> (Thunk, Thunk),
+    alt!(
+        do_parse!(
+            key: nom_object_key  >>
+                 nom_colon >>
+            val: nom_expr  >>
+            (key, val)
+        ) |
+        nom_identifier => { |s: NS| {
+            let key = Thunk::String((&s).to_string(), false);
+            let val = Thunk::IndexShortcut(Some((&s).to_string()), None, false);
+            (key, val)
+        }}
     )
 );
-named!(nom_primary_collection2(NS) -> (Vec<(Thunk, Option<Thunk>)>, Option<NS>),
+named!(nom_primary_collection2(NS) -> (Vec<(Thunk, Thunk)>, Option<NS>),
     do_parse!(
         items: delimited!(
                     nom_open_brace,
@@ -709,7 +715,7 @@ fn collection1_to_thunk((thunks, opt): (Vec<Thunk>, Option<NS>)) -> Thunk {
     Thunk::List(thunks, opt.map_or(false, |_| true))
 }
 
-fn collection2_to_thunk((items, opt): (Vec<(Thunk,Option<Thunk>)>, Option<NS>))
+fn collection2_to_thunk((items, opt): (Vec<(Thunk, Thunk)>, Option<NS>))
     -> Thunk
 {
     Thunk::Dict(items, opt.map_or(false, |_| true))

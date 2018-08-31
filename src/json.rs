@@ -545,6 +545,12 @@ impl From<&str> for Json {
     }
 }
 
+impl From<Json> for Json {
+    fn from(val: Json) -> Json {
+        val
+    }
+}
+
 impl From<Vec<Json>> for Json {
     fn from(val: Vec<Json>) -> Json {
         Json::Array(val)
@@ -622,8 +628,6 @@ impl fmt::Debug for Json {
 }
 
 impl Document for Json {
-    type Err=Error;
-
     fn doctype(&self) -> Doctype {
         match self {
             Json::Null => Doctype::Null,
@@ -686,6 +690,32 @@ impl Value for Json {
 
     fn object(self) -> Option<Vec<Property>> {
         match self { Json::Object(obj) => Some(obj), _ => None }
+    }
+}
+
+impl Recurse for Json {
+    fn recurse(self) -> Vec<Json> {
+        let mut list = Vec::new();
+        do_recurse(self, &mut list);
+        list
+    }
+}
+
+pub fn do_recurse(value: Json, list: &mut Vec<Json>) {
+    use Json::{Null, Bool, Integer, Float, String as S, Array, Object};
+
+    match value {
+        doc@Null | doc@Bool(_) | doc@Integer(_) | doc@Float(_) | doc@S(_) => {
+            list.push(doc)
+        },
+        Array(values) => {
+            list.push(Array(values.clone()))
+            values.into_iter().for_each(|value| do_recurse(value, list));
+        },
+        Object(props) => {
+            list.push(Object(props.clone()));
+            props.into_iter().for_each(|prop| do_recurse(prop.value()));
+        },
     }
 }
 
@@ -851,10 +881,8 @@ impl Not for Json {
     type Output=Json;
 
     fn not(self) -> Json {
-        match self {
-            Json::Bool(val) => Json::Bool(!val),
-            _ => Json::Null,
-        }
+        let val: bool = From::from(json);
+        Json::Bool(val)
     }
 }
 
@@ -1040,22 +1068,14 @@ impl BitOr for Json {
 }
 
 impl And for Json {
-    type Output=Json;
-
-    fn and(self, other: Json) -> Self::Output {
-        let lhs = bool::from(self);
-        let rhs = bool::from(other);
-        Json::Bool(lhs & rhs)
+    fn and(self, other: Json) -> bool {
+        From::from(self) && From::from(other)
     }
 }
 
 impl Or for Json {
-    type Output=Json;
-
-    fn or(self, other: Json) -> Self::Output {
-        let lhs = bool::from(self);
-        let rhs = bool::from(other);
-        Json::Bool(lhs | rhs)
+    fn or(self, other: Json) -> bool {
+        bool::from(self) || bool::from(other)
     }
 }
 

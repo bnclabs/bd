@@ -4,20 +4,13 @@ use std::ops::{Shr, Shl, BitAnd, BitXor, BitOr};
 use std::convert::{From};
 use std::cmp::Ordering;
 
-use query;
-use json::Json;
+
+// TODO: is it possible to monomorphise this ?
+pub type Input<D> where D: Document = Box<DocIterator<Item=Entry<D>>>
 
 
-pub trait DocIterator : Clone {
-    type Item;
-
-    fn next(&mut self, c: &mut Context) -> Option<Self::Item>;
-}
-
-
-pub trait Recurse : Sized {
-    fn recurse(self) -> Vec<Self>;
-}
+// TODO: is it possible to monomorphise this ?
+pub type Output<T> where T: Document = Box<DocIterator<Item=Entry<T>>>
 
 
 #[derive(Debug,Clone,Copy)]
@@ -32,29 +25,33 @@ pub enum Doctype {
 }
 
 
+pub trait DocIterator : Clone {
+    type Item;
+
+    fn next(&mut self, c: &mut Context) -> Option<&mut Self::Item>;
+}
+
+
 pub trait Document :
     From<bool> + From<i128> + From<f64> + From<String> + From<&str> +
-    From<Vec<Json>> + From<Vec<Property<Json>>> +
+    From<Self> + From<Vec<Self>> + From<Vec<Property<Self>>> +
     fmt::Debug + Default + Clone +
     PartialEq + PartialOrd +
 
     Neg<Output=Self> + Not<Output=Self> +
-    Mul<Rhs=Json,Output=Self,Rhs=Json> + Div<Rhs=Json,Output=Self> +
-    Rem<Rhs=Json,Output=Self> +
-    Add<Rhs=Json,Output=Self> + Sub<Rhs=Json,Output=Self> +
-    Shr<Rhs=Json,Output=Self> + Shl<Rhs=Json,Output=Self> +
-    BitAnd<Rhs=Json,Output=Self> + BitXor<Rhs=Json,Output=Self> +
-    BitOr<Rhs=Json,Output=Self> +
+    Mul<Rhs=Self,Output=Self,Rhs=Self> + Div<Rhs=Self,Output=Self> +
+    Rem<Rhs=Self,Output=Self> +
+    Add<Rhs=Self,Output=Self> + Sub<Rhs=Self,Output=Self> +
+    Shr<Rhs=Self,Output=Self> + Shl<Rhs=Self,Output=Self> +
+    BitAnd<Rhs=Self,Output=Self> + BitXor<Rhs=Self,Output=Self> +
+    BitOr<Rhs=Self,Output=Self> +
 
-    Value + Slice +
-    And<Rhs=Json,Output=Self> + Or<Rhs=Json,Output=Self> +
+    Recurse + Value + Slice +
+    And<Rhs=Self,Output=Self> + Or<Rhs=Self,Output=Self> +
     Docindex<isize> +
     ItemIterator<Self> + ItemIterator<Property<Self>> +
     Append<&str> + Append<Vec<Self>> + Append<Vec<Property<Self>>> +
 {
-
-    type Err: Into<query::Error> + fmt::Debug;
-
     fn doctype(&self) -> Doctype;
 
     fn len(self) -> Option<usize>;
@@ -63,15 +60,15 @@ pub trait Document :
 }
 
 pub trait And<Rhs=Self> {
-    type Output=Self;
-
-    fn and(self, other: Rhs) -> Self::Output;
+    fn and(self, other: Rhs) -> bool;
 }
 
 pub trait Or<Rhs=Self> {
-    type Output=Self;
+    fn or(self, other: Rhs) -> bool;
+}
 
-    fn or(self, other: Rhs) -> Self::Output;
+pub trait Recurse : Sized {
+    fn recurse(self) -> Vec<Self>;
 }
 
 pub trait Value {
