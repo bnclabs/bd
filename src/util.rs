@@ -1,3 +1,6 @@
+use db::{Document, Doctype};
+
+
 pub fn slice_range_check(start: isize, end: isize, len: usize)
     -> Option<(usize, usize)>
 {
@@ -25,3 +28,11 @@ pub fn normalized_offset(off: isize, len: usize) -> Option<usize> {
     if off >= 0 && off < len { Some(off as usize) } else { None }
 }
 
+pub fn has_key<D>(obj: &D, key: &str) -> bool where D: Document {
+    if obj.doctype() != Doctype::Object { return false }
+
+    for prop in obj.object_ref().unwrap().iter() {
+        if prop.key_ref() == key { return true }
+    }
+    false
+}

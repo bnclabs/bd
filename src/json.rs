@@ -4,9 +4,10 @@ use std::fmt::{self, Write};
 use std::ops::{Neg, Not, Mul, Div, Rem, Add, Sub, Shr, Shl};
 use std::ops::{BitAnd, BitXor, BitOr};
 
-use db::{self, Document, Doctype, Docindex};
-use db::{And, Or, Slice, ItemIterator};
+use db::{Document,Doctype,ItemIterator};
+use db::{Docindex,And,Or,Slice,Recurse,Append,Value};
 use lex::Lex;
+use prop;
 use util;
 
 include!("./json.rs.lookup");
@@ -467,7 +468,7 @@ fn check_eof(text: &str, lex: &mut Lex) -> Result<()> {
 }
 
 
-type Property = db::Property<Json>;
+type Property = prop::Property<Json>;
 
 
 #[derive(Clone,PartialEq,PartialOrd)]
@@ -502,7 +503,7 @@ impl Json {
         write!(w, "\"")
     }
 
-    fn insert(&mut obj, prop: Property) {
+    fn insert(obj: &mut Vec<Property>, prop: Property) {
         let off = search_by_key(obj, prop.key_ref())
             .unwrap_or_else(|e| e.key_missing_at());
         obj.insert(off, prop)
@@ -539,18 +540,6 @@ impl From<String> for Json {
     }
 }
 
-impl From<&str> for Json {
-    fn from(val: &str) -> Json {
-        Json::String(val.to_string())
-    }
-}
-
-impl From<Json> for Json {
-    fn from(val: Json) -> Json {
-        val
-    }
-}
-
 impl From<Vec<Json>> for Json {
     fn from(val: Vec<Json>) -> Json {
         Json::Array(val)
@@ -558,8 +547,10 @@ impl From<Vec<Json>> for Json {
 }
 
 impl From<Vec<Property>> for Json {
-    fn from(val: Vec<Property>) -> Json {
-        Json::Object(val)
+    fn from(vals: Vec<Property>) -> Json {
+        let mut props: Vec<Property> = vec![];
+        vals.into_iter().for_each(|val| Json::insert(&mut props, val));
+        Json::Object(props)
     }
 }
 
@@ -650,13 +641,11 @@ impl Document for Json {
         }
     }
 
-    fn set(&mut self, key: &str, value: Json) {
+    fn set(&mut self, key: &str, value: &Json) {
         match self {
             Json::Object(obj) => {
-                match search_by_key(obj, key).ok() {
-                    Ok(off) => obj[off].set_value(value),
-                    Err(off) => obj[off].set_value(value),
-                };
+                let prop =Property::new(key.to_string(), value.clone());
+                Json::insert(obj, prop);
             },
             _ => panic!("cannot set {:?} with {}", self.doctype(), key),
         }
@@ -664,6 +653,8 @@ impl Document for Json {
 }
 
 impl Value for Json {
+    type item=Json;
+
     fn null() -> Json {
         Json::Null
     }
@@ -684,8 +675,16 @@ impl Value for Json {
         match self { Json::Float(f) => Some(f), _ => None }
     }
 
+    fn array_ref(&self) -> Option<&Vec<Json>> {
+        match self { Json::Array(arr) => Some(arr), _ => None }
+    }
+
     fn array(self) -> Option<Vec<Json>> {
         match self { Json::Array(arr) => Some(arr), _ => None }
+    }
+
+    fn object_ref(&self) -> Option<&Vec<Property>> {
+        match self { Json::Object(obj) => Some(obj), _ => None }
     }
 
     fn object(self) -> Option<Vec<Property>> {
@@ -694,6 +693,8 @@ impl Value for Json {
 }
 
 impl Recurse for Json {
+    type item=Json;
+
     fn recurse(self) -> Vec<Json> {
         let mut list = Vec::new();
         do_recurse(self, &mut list);
@@ -702,24 +703,24 @@ impl Recurse for Json {
 }
 
 pub fn do_recurse(value: Json, list: &mut Vec<Json>) {
-    use Json::{Null, Bool, Integer, Float, String as S, Array, Object};
+    use self::Json::{Array, Object};
 
     match value {
-        doc@Null | doc@Bool(_) | doc@Integer(_) | doc@Float(_) | doc@S(_) => {
-            list.push(doc)
-        },
         Array(values) => {
-            list.push(Array(values.clone()))
+            list.push(Array(values.clone()));
             values.into_iter().for_each(|value| do_recurse(value, list));
         },
         Object(props) => {
             list.push(Object(props.clone()));
-            props.into_iter().for_each(|prop| do_recurse(prop.value()));
+            props.into_iter().for_each(|prop| do_recurse(prop.value(), list));
         },
+        doc => list.push(doc),
     }
 }
 
 impl Docindex<isize> for Json {
+    type item=Json;
+
     fn index(self, off: isize) -> Option<Json> {
         match self {
             Json::Array(a) => {
@@ -818,6 +819,8 @@ impl ItemIterator<Property> for Json {
 }
 
 impl Slice for Json {
+    type item=Json;
+
     fn slice(self, start: isize, end: isize) -> Option<Json> {
         match self {
             Json::Array(arr) => {
@@ -833,10 +836,10 @@ impl Slice for Json {
     }
 }
 
-impl Append<&str> for Json {
-    fn append(&mut self, value: &str) {
+impl Append<String> for Json {
+    fn append(&mut self, value: String) {
         match self {
-            Json::String(s) => s.push_str(value),
+            Json::String(s) => s.push_str(&value),
             _ => panic!("cannot append to {:?}", self.doctype()),
         }
     }
@@ -857,7 +860,7 @@ impl Append<Vec<Property>> for Json {
     fn append(&mut self, properties: Vec<Property>) {
         match self {
             Json::Object(obj) => {
-                properties.into_iter().for_each(|prop| obj.insert(prop))
+                properties.into_iter().for_each(|prop| Json::insert(obj, prop))
             }
             _ => panic!("cannot append to {:?}", self.doctype()),
         }
@@ -881,8 +884,8 @@ impl Not for Json {
     type Output=Json;
 
     fn not(self) -> Json {
-        let val: bool = From::from(json);
-        Json::Bool(val)
+        let val: bool = From::from(self);
+        Json::Bool(!val)
     }
 }
 
@@ -1068,20 +1071,28 @@ impl BitOr for Json {
 }
 
 impl And for Json {
-    fn and(self, other: Json) -> bool {
-        From::from(self) && From::from(other)
+    type Output=Json;
+
+    fn and(self, other: Json) -> Json {
+        let lhs: bool = From::from(self);
+        let rhs: bool = From::from(other);
+        From::from(lhs && rhs)
     }
 }
 
 impl Or for Json {
-    fn or(self, other: Json) -> bool {
-        bool::from(self) || bool::from(other)
+    type Output=Json;
+
+    fn or(self, other: Json) -> Json {
+        let lhs: bool = From::from(self);
+        let rhs: bool = From::from(other);
+        From::from(lhs || rhs)
     }
 }
 
 
 fn search_by_key(obj: &Vec<Property>, key: &str) -> Result<usize> {
-    match db::search_by_key(obj, key) {
+    match prop::search_by_key(obj, key) {
         Ok(off) => Ok(off),
         Err(off) => Err(Error::KeyMissing(off, key.to_string())),
     }

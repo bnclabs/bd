@@ -7,6 +7,7 @@
 #![feature(slice_index_methods)]
 #![feature(associated_type_defaults)]
 #![feature(vec_remove_item)]
+#![feature(iterator_flatten)]
 
 
 extern crate test;
@@ -16,13 +17,16 @@ extern crate regex;
 
 //pub mod context;
 pub mod db;
-//pub mod entry;
-//pub mod json;
-//mod lex;
-//mod ops;
-//pub mod query;
-//mod query_nom;
-//mod util;
+pub mod entry;
+pub mod json;
+mod lex;
+pub mod meta;
+pub mod op;
+mod ops;
+mod prop;
+pub mod query;
+mod query_nom;
+mod util;
 
 #[cfg(test)]
 mod tests {

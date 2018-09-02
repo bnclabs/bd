@@ -1,3 +1,8 @@
+use std::cmp::Ordering;
+
+use db::Document;
+
+
 #[derive(Debug,Clone)]
 pub struct KeyValue<K,D>(K, D) where K: PartialOrd , D: Document;
 
@@ -8,32 +13,32 @@ impl<K,D> KeyValue<K,D> where K: PartialOrd, D: Document {
     }
 
     #[inline]
-    fn key(self) -> K {
+    pub fn key(self) -> K {
         self.0
     }
 
     #[inline]
-    fn key_ref(&self) -> &K {
+    pub fn key_ref(&self) -> &K {
         &self.0
     }
 
     #[inline]
-    fn value(self) -> D {
+    pub fn value(self) -> D {
         self.1
     }
 
     #[inline]
-    fn value_ref(&self) -> &D {
+    pub fn value_ref(&self) -> &D {
         &self.1
     }
 
     #[inline]
-    fn value_mut(&mut self) -> &mut D {
+    pub fn value_mut(&mut self) -> &mut D {
         &mut self.1
     }
 
     #[inline]
-    fn set_value(&mut self, value: D) {
+    pub fn set_value(&mut self, value: D) {
         self.1 = value;
     }
 }
@@ -74,7 +79,7 @@ impl<D> PartialOrd for Property<D> where D: Document {
 
 
 pub fn search_by_key<D>(obj: &Vec<KeyValue<String,D>>, key: &str)
-    -> result::Result<usize,usize> where D: Document
+    -> Result<usize,usize> where D: Document
 {
     use std::cmp::Ordering::{Greater, Equal, Less};
 

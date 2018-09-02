@@ -1,19 +1,12 @@
-use std::{result, fmt, slice, vec};
+use std::{fmt, slice, vec};
 use std::ops::{Neg, Not, Mul, Div, Rem, Add, Sub};
 use std::ops::{Shr, Shl, BitAnd, BitXor, BitOr};
 use std::convert::{From};
-use std::cmp::Ordering;
+
+use prop::Property;
 
 
-// TODO: is it possible to monomorphise this ?
-pub type Input<D> where D: Document = Box<DocIterator<Item=Entry<D>>>
-
-
-// TODO: is it possible to monomorphise this ?
-pub type Output<T> where T: Document = Box<DocIterator<Item=Entry<T>>>
-
-
-#[derive(Debug,Clone,Copy)]
+#[derive(Debug,Clone,Copy,PartialEq,PartialOrd)]
 pub enum Doctype {
     Null,
     Bool,
@@ -25,54 +18,55 @@ pub enum Doctype {
 }
 
 
-pub trait DocIterator : Clone {
-    type Item;
-
-    fn next(&mut self, c: &mut Context) -> Option<&mut Self::Item>;
-}
-
-
 pub trait Document :
-    From<bool> + From<i128> + From<f64> + From<String> + From<&str> +
+    From<bool> + From<i128> + From<f64> + From<String> +
     From<Self> + From<Vec<Self>> + From<Vec<Property<Self>>> +
     fmt::Debug + Default + Clone +
     PartialEq + PartialOrd +
 
     Neg<Output=Self> + Not<Output=Self> +
-    Mul<Rhs=Self,Output=Self,Rhs=Self> + Div<Rhs=Self,Output=Self> +
-    Rem<Rhs=Self,Output=Self> +
-    Add<Rhs=Self,Output=Self> + Sub<Rhs=Self,Output=Self> +
-    Shr<Rhs=Self,Output=Self> + Shl<Rhs=Self,Output=Self> +
-    BitAnd<Rhs=Self,Output=Self> + BitXor<Rhs=Self,Output=Self> +
-    BitOr<Rhs=Self,Output=Self> +
+    Mul<Self,Output=Self> + Div<Self,Output=Self> +
+    Rem<Self,Output=Self> +
+    Add<Self,Output=Self> + Sub<Self,Output=Self> +
+    Shr<Self,Output=Self> + Shl<Self,Output=Self> +
+    BitAnd<Self,Output=Self> + BitXor<Self,Output=Self> +
+    BitOr<Self,Output=Self> +
 
-    Recurse + Value + Slice +
-    And<Rhs=Self,Output=Self> + Or<Rhs=Self,Output=Self> +
-    Docindex<isize> +
+    Recurse<item=Self> + Value<item=Self> + Slice<item=Self> +
+    And<Self,Output=Self> + Or<Self,Output=Self> +
+    Docindex<isize,item=Self> +
     ItemIterator<Self> + ItemIterator<Property<Self>> +
-    Append<&str> + Append<Vec<Self>> + Append<Vec<Property<Self>>> +
+    Append<String> + Append<Vec<Self>> + Append<Vec<Property<Self>>> +
 {
     fn doctype(&self) -> Doctype;
 
     fn len(self) -> Option<usize>;
 
-    fn set(&mut self, value: D);
+    fn set(&mut self, key: &str, value: &Self);
 }
 
 pub trait And<Rhs=Self> {
-    fn and(self, other: Rhs) -> bool;
+    type Output;
+
+    fn and(self, other: Rhs) -> Self::Output;
 }
 
 pub trait Or<Rhs=Self> {
-    fn or(self, other: Rhs) -> bool;
+    type Output;
+
+    fn or(self, other: Rhs) -> Self::Output;
 }
 
-pub trait Recurse : Sized {
-    fn recurse(self) -> Vec<Self>;
+pub trait Recurse {
+    type item: Document;
+
+    fn recurse(self) -> Vec<Self::item>;
 }
 
 pub trait Value {
-    fn null() -> Self;
+    type item: Document;
+
+    fn null() -> Self::item;
 
     fn boolean(self) -> Option<bool>;
 
@@ -82,27 +76,35 @@ pub trait Value {
 
     fn float(self) -> Option<f64>;
 
-    fn array(self) -> Option<Vec<Self>>;
+    fn array_ref(&self) -> Option<&Vec<Self::item>>;
 
-    fn object(self) -> Option<Vec<Property<Self>>>;
+    fn array(self) -> Option<Vec<Self::item>>;
+
+    fn object_ref(&self) -> Option<&Vec<Property<Self::item>>>;
+
+    fn object(self) -> Option<Vec<Property<Self::item>>>;
 }
 
-pub trait Slice : Sized {
-    fn slice(self, start: isize, end: isize) -> Option<Self>;
+pub trait Slice {
+    type item: Document;
+
+    fn slice(self, start: isize, end: isize) -> Option<Self::item>;
 }
 
-pub trait Docindex<Idx> : Sized {
-    fn index(self, i: Idx) -> Option<Self>;
+pub trait Docindex<Idx> {
+    type item: Document;
 
-    fn index_ref(&self, i: Idx) -> Option<&Self>;
+    fn index(self, i: Idx) -> Option<Self::item>;
 
-    fn index_mut(&mut self, i: Idx) -> Option<&mut Self>;
+    fn index_ref(&self, i: Idx) -> Option<&Self::item>;
 
-    fn get<'a>(self, key: &'a str) -> Option<Self>;
+    fn index_mut(&mut self, i: Idx) -> Option<&mut Self::item>;
 
-    fn get_ref<'a>(&self, key: &'a str) -> Option<&Self>;
+    fn get<'a>(self, key: &'a str) -> Option<Self::item>;
 
-    fn get_mut<'a>(&mut self, key: &'a str) -> Option<&mut Self>;
+    fn get_ref<'a>(&self, key: &'a str) -> Option<&Self::item>;
+
+    fn get_mut<'a>(&mut self, key: &'a str) -> Option<&mut Self::item>;
 }
 
 pub trait ItemIterator<T> {

@@ -1,24 +1,27 @@
+use std::collections::HashMap;
+
+use db::Document;
+
 #[derive(Clone)]
-pub struct Context<D> where D: Document {
-    namespace: HashMap<String, Input<D>>
+pub struct Context {
+    namespace: HashMap<String, Box<Document>>,
 }
 
-impl<D> Context<D> where D: Document {
-    pub fn new() -> Context<D> {
+impl Context {
+    pub fn new() -> Context {
         let namespace = HashMap::with_capacity(64);
-        let mut c = Context{namespace};
-        c
+        Context{namespace}
     }
 
-    pub fn get(&self, name: &str) -> Option<Input<D>> {
+    pub fn get(&self, name: &str) -> Option<Box<Document>> {
         self.namespace.get(name).cloned()
     }
 
-    pub fn get_mut(&self, name: &str) -> Option<&Input<D>> {
+    pub fn get_mut(&mut self, name: &str) -> Option<&mut D> {
         self.namespace.get_mut(name)
     }
 
-    pub fn set(&mut self, name: &str, value: Input<D>) {
+    pub fn set(&mut self, name: &str, value: D) {
         self.namespace.insert(name.to_string(), value);
     }
 }

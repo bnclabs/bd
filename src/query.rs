@@ -1,14 +1,22 @@
-use std::{result, error, cmp, iter};
-use std::fmt::{self};
+use std::{cmp};
 use std::str::FromStr;
-use std::ops::{IndexMut};
-use std::collections::HashMap;
 
 use nom::{self, {types::CompleteStr as NS}};
 
-use json::{self};
 use query_nom::parse_program_nom;
-use db::{self, Document, Doctype, ItemIterator, Property};
+use entry::Entry;
+use db::Document;
+use ops::Op;
+
+use ops::{OpIdentity, OpRecurse};
+use ops::{OpNull, OpBool, OpInteger, OpFloat, OpString};
+use ops::{OpIndex, OpIdentifier, OpSlice, OpItervalues, OpIter,};
+use ops::{OpList, OpDict};
+use ops::{OpNeg, OpNot, OpMult, OpDiv, OpRem, OpAdd, OpSub,};
+use ops::{OpShr, OpShl, OpBitand, OpBitor, OpBitxor,};
+use ops::{OpEq, OpNe, OpLt, OpLe, OpGt, OpGe,};
+use ops::{OpAnd, OpOr,};
+use ops::{BuiltinLength, BuiltinChars, BuiltinKeys,};
 
 // TODO: Parametrise Thunk over different types of Document.
 // TODO: Better to replace panic with assert!() macro.
@@ -64,8 +72,11 @@ pub enum Thunk where {
 }
 
 impl Thunk {
-    pub fn prepare<D,T>(self, input: Input<D>) -> Output<T>
-        where D: Document, T: Document
+    pub fn prepare<D,T>(self, input: Op) -> Op
+        where
+        D: Document, T: Document + From<D>,
+        I: Iterator<Item=Entry<D>> + Clone,
+        O: Iterator<Item=Entry<T>> + Clone,
     {
         use query::Thunk::*;
 
@@ -90,11 +101,11 @@ impl Thunk {
             },
             List(thunks, _opt) => {
                 let iters = thunks.map(|t| t.prepare(input.clone())).collect();
-                OpList(iters, t);
+                OpList::new(iters, t);
             }
             Dict(thunks, _opt) => {
                 let iters = thunks.map(|t| t.prepare(input.clone())).collect();
-                OpDict(iters, t);
+                OpDict::new(iters, t);
             }
 
             Neg(thunk) => OpNeg::new(thunk.prepare(input), t),
@@ -130,15 +141,15 @@ impl Thunk {
             },
             BitAnd(lthunk, rthunk) => {
                 let l = lthunk.prepare(input.clone());
-                OpBitAnd::new(l, rthunk.prepare(input), t)
+                OpBitand::new(l, rthunk.prepare(input), t)
             },
             BitXor(lthunk, rthunk) => {
                 let l = lthunk.prepare(input.clone());
-                OpBitXor::new(l, rthunk.prepare(input), t)
+                OpBitxor::new(l, rthunk.prepare(input), t)
             },
             BitOr(lthunk, rthunk) => {
                 let l = lthunk.prepare(input.clone());
-                OpBitOr::new(l, rthunk.prepare(input), t)
+                OpBitor::new(l, rthunk.prepare(input), t)
             },
             Eq(lthunk, rthunk) => {
                 let l = lthunk.prepare(input.clone());
@@ -182,11 +193,11 @@ impl Thunk {
                     "length" => BuiltinLength::new(args, t),
                     "chars" => BuiltinChars::new(args, t),
                     "keys" => BuiltinKeys::new(args, t),
-                    "has" => BuiltinHas::new(args, t),
-                    "in" => BuiltinIn::new(args, t),
-                    "map" => BuiltinMap::new(args, t),
-                    "any" => BuiltinAny::new(args, t),
-                    "all" => BuiltinAll::new(args, t),
+                    //"has" => BuiltinHas::new(args, t),
+                    //"in" => BuiltinIn::new(args, t),
+                    //"map" => BuiltinMap::new(args, t),
+                    //"any" => BuiltinAny::new(args, t),
+                    //"all" => BuiltinAll::new(args, t),
                 }
             }
         }
@@ -194,11 +205,28 @@ impl Thunk {
 }
 
 impl FromStr for Thunk {
-    type Err=Error;
+    type Err=String;
 
-    fn from_str(text: &str) -> Result<Thunk> {
-        let (_x, thunk) = parse_program_nom(NS(text))?;
-        Ok(thunk)
+    fn from_str(text: &str) -> Result<Thunk,String> {
+        use nom::simple_errors::Context as NomContext;
+
+        let res = parse_program_nom(NS(text))?;
+        match res {
+            Ok((_x, thunk)) => Ok(thunk),
+            Err(err) => match err {
+                nom::Err::Incomplete(_) => {
+                    Err(format!("{}", err))
+                },
+                nom::Err::Error(NomContext::Code(rem, _)) => {
+                    let rem_till = cmp::min(5, rem.len());
+                    Err(format!("error at {:}", &rem[..rem_till]))
+                },
+                nom::Err::Failure(NomContext::Code(rem, _)) => {
+                    let rem_till = cmp::min(5, rem.len());
+                    Err(format!("failure at {}", &rem[..rem_till]))
+                },
+            }
+        }
     }
 }
 
@@ -211,8 +239,6 @@ mod test {
 
     #[test]
     fn test_query_empty() {
-        let mut c = Context::new();
-
         let mut thunk: Thunk = "".parse().unwrap();
         let out = thunk(S("hello".to_string()), &mut c).unwrap();
         assert_eq!(1, out.len());
@@ -227,7 +253,6 @@ mod test {
     #[test]
     fn test_query_literal() {
         let doc: Json = "[10]".parse().unwrap();
-        let mut c = Context::new();
 
         let mut thunk: Thunk = "null".parse().unwrap();
         let out = c.eval(&mut thunk, doc.clone()).unwrap();
@@ -268,7 +293,6 @@ mod test {
     #[test]
     fn test_query_identity() {
         let mut thunk: Thunk = ".".parse().unwrap();
-        let mut c = Context::new();
 
         let doc: Json = "null".parse().unwrap();
         let out = thunk(doc.clone(), &mut c).unwrap();
@@ -306,7 +330,6 @@ mod test {
     #[test]
     fn test_query_get() {
         let mut thunk: Thunk = ".foo".parse().unwrap();
-        let mut c = Context::new();
 
         let doc: Json = r#"{"foo": 10}"#.parse().unwrap();
         let out = thunk(doc.clone(), &mut c).unwrap();
@@ -365,7 +388,6 @@ mod test {
     #[test]
     fn test_query_index() {
         let mut thunk: Thunk = ".0".parse().unwrap();
-        let mut c = Context::new();
 
         let doc: Json = r#"[10, true, "hello"]"#.parse().unwrap();
         let out = thunk(doc.clone(), &mut c).unwrap();
@@ -401,7 +423,6 @@ mod test {
     fn test_query_slice_array() {
         let mut thunk: Thunk = ".[2..4]".parse().unwrap();
         let doc: Json = r#"["a", "b", "c", "d", "e"]"#.parse().unwrap();
-        let mut c = Context::new();
 
         let refval = r#"[["c","d"]]"#;
         let out = thunk(doc.clone(), &mut c).unwrap();
@@ -437,7 +458,6 @@ mod test {
     fn test_query_slice_string() {
         let mut thunk: Thunk = ".[2..4]".parse().unwrap();
         let doc: Json = r#""abcdefghi""#.parse().unwrap();
-        let mut c = Context::new();
 
         let refval = r#"["cd"]"#;
         let out = thunk(doc.clone(), &mut c).unwrap();
@@ -472,7 +492,6 @@ mod test {
     #[test]
     fn test_query_iterator() {
         let mut thunk: Thunk = ".[]".parse().unwrap();
-        let mut c = Context::new();
 
         let doc: Json = r#"[1,2,3]"#.parse().unwrap();
         let refval = r#"[1, 2, 3]"#;
@@ -535,7 +554,6 @@ mod test {
     #[test]
     fn test_query_pipe() {
         let mut thunk: Thunk = ".[] | foo".parse().unwrap();
-        let mut c = Context::new();
 
         let doc: Json = r#"[{"foo": 10}, {"foo":20}]"#.parse().unwrap();
         let refval = r#"[10, 20]"#;
@@ -571,7 +589,6 @@ mod test {
     #[test]
     fn test_query_paranthesis() {
         let mut thunk: Thunk = "2 + . * 15".parse().unwrap();
-        let mut c = Context::new();
 
         let doc: Json = r#"10"#.parse().unwrap();
         let refval = r#"[152]"#;
@@ -588,7 +605,6 @@ mod test {
     #[test]
     fn test_query_collection_list() {
         let mut thunk: Thunk = r#"[]"#.parse().unwrap();
-        let mut c = Context::new();
 
         let doc: Json = r#"10"#.parse().unwrap();
         let refval = r#"[[]]"#;
@@ -631,7 +647,6 @@ mod test {
     #[test]
     fn test_query_collection_object() {
         let mut thunk: Thunk = r#"{"a":42,"b":17}"#.parse().unwrap();
-        let mut c = Context::new();
 
         let doc: Json = r#"10"#.parse().unwrap();
         let refval = r#"[{"a":42,"b":17}]"#;
@@ -696,7 +711,6 @@ mod test {
     #[test]
     fn test_query_recurse() {
         let mut thunk: Thunk = r#"..|.a?"#.parse().unwrap();
-        let mut c = Context::new();
 
         let doc: Json = r#"[[{"a":1}, {"a":2}],{"a":3}]"#.parse().unwrap();
         let refval = r#"[1, 2, 3]"#;
@@ -707,7 +721,6 @@ mod test {
     #[test]
     fn test_query_addition() {
         let mut thunk: Thunk = r#"a+b"#.parse().unwrap();
-        let mut c = Context::new();
 
         let doc: Json = r#"{"a":1,"b":2}"#.parse().unwrap();
         let refval = r#"[3]"#;
@@ -743,7 +756,6 @@ mod test {
     #[test]
     fn test_query_subraction() {
         let mut thunk: Thunk = r#"a-b"#.parse().unwrap();
-        let mut c = Context::new();
 
         let doc: Json = r#"{"a":1,"b":2}"#.parse().unwrap();
         let refval = r#"[-1]"#;
@@ -766,7 +778,6 @@ mod test {
     #[test]
     fn test_query_multiplication() {
         let mut thunk: Thunk = r#"a*b"#.parse().unwrap();
-        let mut c = Context::new();
 
         let doc: Json = r#"{"a":1,"b":2}"#.parse().unwrap();
         let refval = r#"[2]"#;
@@ -813,7 +824,6 @@ mod test {
     #[test]
     fn test_query_division() {
         let mut thunk: Thunk = r#"a/b"#.parse().unwrap();
-        let mut c = Context::new();
 
         let doc: Json = r#"{"a":1,"b":2}"#.parse().unwrap();
         let refval = r#"[5e-1]"#;
@@ -860,7 +870,6 @@ mod test {
     #[test]
     fn test_query_rem() {
         let mut thunk: Thunk = r#"a%b"#.parse().unwrap();
-        let mut c = Context::new();
 
         let doc: Json = r#"{"a":1,"b":2}"#.parse().unwrap();
         let refval = r#"[1]"#;
@@ -900,7 +909,6 @@ mod test {
 
     #[test]
     fn test_query_builtin_len() {
-        let mut c = Context::new();
         let mut thunk: Thunk = r#". | length"#.parse().unwrap();
         let doc: Json = r#"null"#.parse().unwrap();
         let refval = r#"[0]"#;
@@ -940,8 +948,6 @@ mod test {
 
     #[test]
     fn test_query_builtin_chars() {
-        let mut c = Context::new();
-
         let mut thunk: Thunk = r#". | chars | length"#.parse().unwrap();
         let doc: Json = r#""汉语""#.parse().unwrap();
         let refval = r#"[2]"#;
@@ -951,8 +957,6 @@ mod test {
 
     #[test]
     fn test_query_builtin_keys() {
-        let mut c = Context::new();
-
         let mut thunk: Thunk = r#". | keys"#.parse().unwrap();
         let doc: Json = r#"{"abc": 1, "abcd": 2, "Foo": 3}"#.parse().unwrap();
         let refval = r#"[["Foo","abc","abcd"]]"#;
@@ -968,8 +972,6 @@ mod test {
 
     #[test]
     fn test_query_builtin_has() {
-        let mut c = Context::new();
-
         let mut thunk: Thunk = r#"has("foo")"#.parse().unwrap();
         let doc: Json = r#"{"foo": 1, "abcd": 2, "Foo": 3}"#.parse().unwrap();
         let refval = r#"[true]"#;
@@ -991,8 +993,6 @@ mod test {
 
     #[test]
     fn test_query_builtin_in() {
-        let mut c = Context::new();
-
         let mut thunk: Thunk = r#".[] | in({"foo": 42})"#.parse().unwrap();
         let doc: Json = r#"["foo", "bar"]"#.parse().unwrap();
         let refval = r#"[true, false]"#;
@@ -1014,7 +1014,6 @@ mod test {
 
     #[test]
     fn test_query_builtin_map() {
-        let mut c = Context::new();
         let mut thunk: Thunk = r#"map(.)"#.parse().unwrap();
 
         let doc: Json = r#"["foo", "bar"]"#.parse().unwrap();
@@ -1043,7 +1042,6 @@ mod test {
 
     #[test]
     fn test_query_builtin_any() {
-        let mut c = Context::new();
         let mut thunk: Thunk = r#"any(. == 1)"#.parse().unwrap();
 
         let doc: Json = r#"[1, 2]"#.parse().unwrap();
@@ -1072,7 +1070,6 @@ mod test {
 
     #[test]
     fn test_query_builtin_all() {
-        let mut c = Context::new();
         let mut thunk: Thunk = r#"all(. == 1)"#.parse().unwrap();
 
         let doc: Json = r#"[1, 1]"#.parse().unwrap();
