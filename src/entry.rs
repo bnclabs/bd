@@ -63,7 +63,7 @@ impl From<IterPosition> for i128 {
 impl From<i128> for IterPosition {
     fn from(val: i128) -> IterPosition {
         use self::IterPosition::{Item, Next, End};
-        match val { 1 => Item, 2 => Next, 3 => End }
+        match val { 1 => Item, 2 => Next, 3 => End, _ => unreachable!() }
     }
 }
 

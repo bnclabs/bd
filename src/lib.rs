@@ -7,7 +7,6 @@
 #![feature(slice_index_methods)]
 #![feature(associated_type_defaults)]
 #![feature(vec_remove_item)]
-#![feature(iterator_flatten)]
 
 
 extern crate test;
@@ -26,6 +25,7 @@ mod ops;
 mod prop;
 pub mod query;
 mod query_nom;
+//pub mod source_mem;
 mod util;
 
 #[cfg(test)]

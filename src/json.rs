@@ -631,7 +631,7 @@ impl Document for Json {
         }
     }
 
-    fn len(self) -> Option<usize> {
+    fn len(&self) -> Option<usize> {
         match self {
             Json::String(s) => Some(s.len()),
             Json::Array(a) => Some(a.len()),

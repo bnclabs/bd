@@ -4,7 +4,19 @@ use std::ops::{Shr, Shl, BitAnd, BitXor, BitOr};
 use std::convert::{From};
 
 use prop::Property;
+use entry::Entry;
 
+
+pub type Input<'a, D> = Box<dyn Pipeline<'a,D,Item=Entry<D>> + 'a>;
+
+pub trait Pipeline<'a,D,Item=Entry<D>>: Iterator<Item=Entry<D>> + Repeater<'a,D>
+    where D: 'a + Document
+{
+}
+
+pub trait Repeater<'a, D> where D: 'a + Document, Self: 'a {
+    fn repeat(&self) -> Input<'a,D>;
+}
 
 #[derive(Debug,Clone,Copy,PartialEq,PartialOrd)]
 pub enum Doctype {
@@ -40,7 +52,7 @@ pub trait Document :
 {
     fn doctype(&self) -> Doctype;
 
-    fn len(self) -> Option<usize>;
+    fn len(&self) -> Option<usize>;
 
     fn set(&mut self, key: &str, value: &Self);
 }

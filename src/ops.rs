@@ -1,82 +1,54 @@
 use std::{vec, iter};
-use std::marker::PhantomData;
 
 use entry::{self,Entry,IterPosition};
-use db::{Document, Doctype, ItemIterator};
+use db::{Document, Doctype, ItemIterator, Input, Pipeline, Repeater};
 use prop::Property;
 
 
-#[derive(Clone)]
-pub enum Op<D,T>
-    where
-    D: Document + Clone,
-    T: Document + From<D> + Clone
-{
-    Identity{ input: Box<Op> },
-    Recurse{ input: Box<Op>, iter: Option<vec::IntoIter<Entry<D>>> },
-
-    Null{ input: Box<Op> },
-    Bool{ input: Box<Op>, Value: T },
-    Integer{ input: Box<Op>, Value: T },
-    Float{ input: Box<Op>, Value: T },
-    String{ input: Box<Op>, Value: T },
-
-    Index{ input: Box<Op> key: Option<String>, off: Option<isize> },
-    Identifier{ input: Box<Op> symbol: String, index: Option<isize> },
-    Slice{ input: Box<Op> start: isize, end: isize },
-    IterValues{ input: Box<Op> iter: Option<vec::IntoIter<Entry<D>>> },
-    Iter{ inputs: Vec<Op> done: bool, iter: Option<vec::IntoIter<Entry<D>>> },
-    List{ inputs: Vec<Op> },
-    Dict{ inputs: Vec<(Op, Op)> },
-
-    Neg{ input: Box<Op> },
-    Not{ input: Box<Op> },
-    Mul{ lhs: Box<Op> rhs: Box<Op> },
-    Div{ lhs: Box<Op> rhs: Box<Op> },
-    Rem{ lhs: Box<Op> rhs: Box<Op> },
-    Add{ lhs: Box<Op> rhs: Box<Op> },
-    Sub{ lhs: Box<Op> rhs: Box<Op> },
-    Shr{ lhs: Box<Op> rhs: Box<Op> },
-    Shl{ lhs: Box<Op> rhs: Box<Op> },
-    Bitand{ lhs: Box<Op>, rhs: Box<Op> },
-    Bitor{ lhs: Box<Op>, rhs: Box<Op> },
-    Bitxor{ lhs: Box<Op>, rhs: Box<Op> },
-    Eq{ lhs: Box<Op>, rhs: Box<Op> },
-    Ne{ lhs: Box<Op>, rhs: Box<Op> },
-    Lt{ lhs: Box<Op>, rhs: Box<Op> },
-    Le{ lhs: Box<Op>, rhs: Box<Op> },
-    Gt{ lhs: Box<Op>, rhs: Box<Op> },
-    Ge{ lhs: Box<Op>, rhs: Box<Op> },
-
-    And{ lhs: Box<Op>, rhs: Box<Op> },
-    Or{ lhs: Box<Op>, rhs: Box<Op> },
-
-    BuiltinLength{ arg: Option<Box<Op>> },
-    BuiltinChars{ arg: Option<Box<Op>> },
-    BuiltinKeys{ arg: Option<Box<Op>> },
+pub struct Identity<'a, D> where D: Document {
+    input: Input<'a, D>,
 }
 
-impl<D,T> for Op<D,T>
-    where
-    D: Document + Clone,
-    T: Document + From<D> + Clone
-{
-    // constructors
-    pub fn new_identity(input: Op) -> Op<D,T> {
-        Op::Identity{input: Box::new(input)}
+impl<'a, D> Identity<'a, D> where D: Document {
+    pub fn new(input: Input<D>) -> Identity<D> {
+        Identity{input}
+    }
+}
+
+impl<'a, D> Repeater<'a,D> for Identity<'a, D> where D: 'a + Document {
+    fn repeat(&self) -> Input<'a,D> {
+        Box::new(Identity{input: self.input.repeat()})
+    }
+}
+
+impl<'a, D> Iterator for Identity<'a, D> where D: Document {
+    type Item=Entry<D>;
+
+    fn next(&mut self) -> Option<Entry<D>> {
+        Some(self.input.next()?)
+    }
+}
+
+impl<'a, D> Pipeline<'a,D> for Identity<'a, D> where D: 'a + Document {
+}
+
+
+pub struct Recurse<'a, D> where D: Document {
+    input: Input<'a,D>,
+    iter: Option<vec::IntoIter<Entry<D>>>,
+}
+
+impl<'a,D> Recurse<'a,D> where D: Document {
+    pub fn new(input: Input<D>) -> Recurse<D> {
+        Recurse{input, iter: None}
     }
 
-    pub fn new_recurse(input: Op) -> OpRecurse<D,T,I> {
-        Op::Recurse{input: Box::new(input), iter: None}
-    }
-
-    // privates
-    fn recurse_values(input: &mut Op) -> Option<Vec<Entry<D>>> {
-        let d_entry = input.next()?;
+    fn values(&mut self) -> Option<Vec<Entry<D>>> {
+        let d_entry = self.input.next()?;
         if d_entry.has_error() { return Some(vec![d_entry]) }
 
         let mut entries = Vec::new();
-        for value in d_entry.doc.recurse() {
+        for value in d_entry.doc.clone().recurse() {
             let mut entry = d_entry.clone();
             entry.doc = value;
             entries.push(entry)
@@ -84,267 +56,249 @@ impl<D,T> for Op<D,T>
         Some(entry::fixpositions(entries))
     }
 
-    fn recurse_next(iter: &mut vec::IntoIter<Entry<D>>) -> Option<Entry<D> {
+    fn next_value(&mut self) -> Option<Entry<D>> {
         let entry = loop {
-            match iter.unwrap().next() {
+            match self.iter.as_mut().unwrap().next() {
                 Some(entry) => break entry,
-                None => { *iter = Some(self.recurse_values()?.into_iter()); },
+                None => { self.iter = Some(self.values()?.into_iter()); },
             }
         };
         Some(entry)
     }
 }
 
-
-impl<D,T> Iterator for Op<D,T> {
-    type Item=Entry<T>
-
-    fn next(&mut self) -> Option<Entry<T>> {
-        match self {
-            Identity(input) => Some(input.next()?.into()),
-            Recurse(ref mut input, ref mut iter) => {
-                if iter.is_none() {
-                    *iter = Some(Op::recurse_values(input)?.into_iter())
-                }
-                Op::recurse_next(iter).map(|entry| entry.into())
-            },
+impl<'a,D> Repeater<'a,D> for Recurse<'a,D> where D: 'a + Document {
+    fn repeat(&self) -> Input<'a,D> {
+        if let Some(_) = self.iter {
+            panic!("cannot repeat Recurse after the statement is prepared");
         }
+        let x = Recurse{ input: self.input.repeat(), iter: None };
+        Box::new(x)
     }
 }
 
+impl<'a,D> Iterator for Recurse<'a,D> where D: Document {
+    type Item=Entry<D>;
 
-
-impl<D,T,I> OpNull<D,T,I>
-    where
-    D: Document, T: Document + From<D>,
-    I: Iterator<Item=Entry<D>> + Clone
-{
-    pub fn new(input: I, _: T) -> OpNull<D,T,I> {
-        OpNull{input, _data: PhantomData}
+    fn next(&mut self) -> Option<Entry<D>> {
+        if self.iter.is_none() {
+            self.iter = Some(self.values()?.into_iter())
+        }
+        self.next_value().map(|entry| entry)
     }
 }
 
-impl<D,T,I> Clone for OpNull<D,T,I>
-    where
-    D: Document, T: Document + From<D>,
-    I: Iterator<Item=Entry<D>> + Clone
-{
-    fn clone(&self) -> OpNull<D,T,I> {
-        OpNull{input: self.input.clone(), _data: PhantomData}
+impl<'a,D> Pipeline<'a,D> for Recurse<'a,D> where D: 'a + Document {
+}
+
+
+pub struct Null<'a,D> where D: Document {
+    input: Input<'a,D>,
+}
+
+impl<'a,D> Null<'a,D> where D: Document {
+    pub fn new(input: Input<D>) -> Null<D> {
+        Null{input}
     }
 }
 
-impl<D,T,I> Iterator for OpNull<D,T,I>
-    where
-    D: Document, T: Document + From<D>,
-    I: Iterator<Item=Entry<D>> + Clone
-{
-    type Item=Entry<T>;
+impl<'a,D> Repeater<'a,D> for Null<'a,D> where D: 'a + Document {
+    fn repeat(&self) -> Input<'a,D> {
+        let x = Null{input: self.input.repeat()};
+        Box::new(x)
+    }
+}
 
-    fn next(&mut self) -> Option<Entry<T>> {
+impl<'a,D> Iterator for Null<'a,D> where D: Document {
+    type Item=Entry<D>;
+
+    fn next(&mut self) -> Option<Entry<D>> {
         self.input.next()?; // ignore any meta information, errors from input.
-        Some(Entry::new(T::null()))
+        Some(Entry::new(D::null()))
     }
 }
 
-
-impl<D,T,I> OpBool<D,T,I>
-    where
-    D: Document, T: Document + From<D>,
-    I: Iterator<Item=Entry<D>> + Clone
-{
-    pub fn new(input: I, value: bool, _: T) -> OpBool<D,T,I> {
-        OpBool{input, value: From::from(value), _data: PhantomData}
-    }
-}
-
-impl<D,T,I> Clone for OpBool<D,T,I>
-    where
-    D: Document, T: Document + From<D>,
-    I: Iterator<Item=Entry<D>> + Clone
-{
-    fn clone(&self) -> OpBool<D,T,I> {
-        let (input, value) = (self.input.clone(), self.value.clone());
-        OpBool{input, value, _data: PhantomData}
-    }
-}
-
-impl<D,T,I> Iterator for OpBool<D,T,I>
-    where
-    D: Document, T: Document + From<D>,
-    I: Iterator<Item=Entry<D>> + Clone
-{
-    type Item=Entry<T>;
-
-    fn next(&mut self) -> Option<Entry<T>> {
-        self.input.next()?; // ignore any meta information, errors from input.
-        Some(Entry::new(self.value.clone()))
-    }
+impl<'a,D> Pipeline<'a,D> for Null<'a,D> where D: 'a + Document {
 }
 
 
-impl<D,T,I> OpInteger<D,T,I>
-    where
-    D: Document, T: Document + From<D>,
-    I: Iterator<Item=Entry<D>> + Clone
-{
-    pub fn new(input: I, value: i128, _: T) -> OpInteger<D,T,I> {
-        OpInteger{input, value: From::from(value), _data: PhantomData}
+pub struct Bool<'a,D> where D: Document {
+    input: Input<'a,D>,
+    value: D,
+}
+
+impl<'a,D> Bool<'a,D> where D: Document {
+    pub fn new(input: Input<D>, value: bool) -> Bool<D> {
+        Bool{input, value: From::from(value)}
     }
 }
 
-impl<D,T,I> Clone for OpInteger<D,T,I>
-    where
-    D: Document, T: Document + From<D>,
-    I: Iterator<Item=Entry<D>> + Clone
-{
-    fn clone(&self) -> OpInteger<D,T,I> {
-        let (input, value) = (self.input.clone(), self.value.clone());
-        OpInteger{input, value, _data: PhantomData}
+impl<'a,D> Repeater<'a,D> for Bool<'a,D> where D: 'a + Document {
+    fn repeat(&self) -> Input<'a,D> {
+        let x = Bool{input: self.input.repeat(), value: self.value.clone()};
+        Box::new(x)
     }
 }
 
-impl<D,T,I> Iterator for OpInteger<D,T,I>
-    where
-    D: Document, T: Document + From<D>,
-    I: Iterator<Item=Entry<D>> + Clone
-{
-    type Item=Entry<T>;
+impl<'a,D> Iterator for Bool<'a,D> where D: Document {
+    type Item=Entry<D>;
 
-    fn next(&mut self) -> Option<Entry<T>> {
+    fn next(&mut self) -> Option<Entry<D>> {
         self.input.next()?; // ignore any meta information, errors from input.
         Some(Entry::new(self.value.clone()))
     }
 }
 
+impl<'a,D> Pipeline<'a,D> for Bool<'a,D> where D: 'a + Document {
+}
 
-impl<D,T,I> OpFloat<D,T,I>
-    where
-    D: Document, T: Document + From<D>,
-    I: Iterator<Item=Entry<D>> + Clone
-{
-    pub fn new(input: I, value: f64, _: T) -> OpFloat<D,T,I> {
-        OpFloat{input, value: From::from(value), _data: PhantomData}
+
+pub struct Integer<'a,D> where D: Document {
+    input: Input<'a,D>,
+    value: D,
+}
+
+impl<'a,D> Integer<'a,D> where D: Document {
+    pub fn new(input: Input<D>, value: i128) -> Integer<D> {
+        Integer{input, value: From::from(value)}
     }
 }
 
-impl<D,T,I> Clone for OpFloat<D,T,I>
-    where
-    D: Document, T: Document + From<D>,
-    I: Iterator<Item=Entry<D>> + Clone
-{
-    fn clone(&self) -> OpFloat<D,T,I> {
-        let (input, value) = (self.input.clone(), self.value.clone());
-        OpFloat{input, value, _data: PhantomData}
+impl<'a,D> Repeater<'a,D> for Integer<'a,D> where D: 'a + Document {
+    fn repeat(&self) -> Input<'a,D> {
+        let x = Integer{input: self.input.repeat(), value: self.value.clone()};
+        Box::new(x)
     }
 }
 
-impl<D,T,I> Iterator for OpFloat<D,T,I>
-    where
-    D: Document, T: Document + From<D>,
-    I: Iterator<Item=Entry<D>> + Clone
-{
-    type Item=Entry<T>;
+impl<'a,D> Iterator for Integer<'a,D> where D: Document {
+    type Item=Entry<D>;
 
-    fn next(&mut self) -> Option<Entry<T>> {
+    fn next(&mut self) -> Option<Entry<D>> {
         self.input.next()?; // ignore any meta information, errors from input.
         Some(Entry::new(self.value.clone()))
     }
 }
 
+impl<'a,D> Pipeline<'a,D> for Integer<'a,D> where D: 'a + Document {
+}
 
-impl<D,T,I> OpString<D,T,I>
-    where
-    D: Document, T: Document + From<D>,
-    I: Iterator<Item=Entry<D>> + Clone
-{
-    pub fn new(input: I, value: String, _: T) -> OpString<D,T,I> {
-        OpString{input, value: From::from(value), _data: PhantomData}
+
+pub struct Float<'a,D> where D: Document {
+    input: Input<'a,D>,
+    value: D,
+}
+
+impl<'a,D> Float<'a,D> where D: Document {
+    pub fn new(input: Input<D>, value: f64) -> Float<D> {
+        Float{input, value: From::from(value)}
     }
 }
 
-impl<D,T,I> Clone for OpString<D,T,I>
-    where
-    D: Document, T: Document + From<D>,
-    I: Iterator<Item=Entry<D>> + Clone
-{
-    fn clone(&self) -> OpString<D,T,I> {
-        let (input, value) = (self.input.clone(), self.value.clone());
-        OpString{input, value, _data: PhantomData}
+impl<'a,D> Repeater<'a,D> for Float<'a,D> where D: 'a + Document {
+    fn repeat(&self) -> Input<'a,D> {
+        let x = Float{input: self.input.repeat(), value: self.value.clone()};
+        Box::new(x)
     }
 }
 
-impl<D,T,I> Iterator for OpString<D,T,I>
-    where
-    D: Document, T: Document + From<D>,
-    I: Iterator<Item=Entry<D>> + Clone
-{
-    type Item=Entry<T>;
+impl<'a,D> Iterator for Float<'a,D> where D: Document {
+    type Item=Entry<D>;
 
-    fn next(&mut self) -> Option<Entry<T>> {
+    fn next(&mut self) -> Option<Entry<D>> {
         self.input.next()?; // ignore any meta information, errors from input.
         Some(Entry::new(self.value.clone()))
     }
 }
 
+impl<'a,D> Pipeline<'a,D> for Float<'a,D> where D: 'a + Document {
+}
 
 
-impl<D,T,I> OpIndex<D,T,I>
-    where
-    D: Document, T: Document + From<D>,
-    I: Iterator<Item=Entry<D>> + Clone
-{
-    pub fn new(input: I, key: Option<String>, off: Option<isize>, _: T)
-        -> OpIndex<D,T,I>
+pub struct StringLit<'a,D> where D: Document {
+    input: Input<'a,D>,
+    value: D,
+}
+
+impl<'a,D> StringLit<'a,D> where D: Document {
+    pub fn new(input: Input<D>, value: String) -> StringLit<D> {
+        StringLit{input, value: From::from(value)}
+    }
+}
+
+impl<'a,D> Repeater<'a,D> for StringLit<'a,D> where D: 'a + Document {
+    fn repeat(&self) -> Input<'a,D> {
+        let x = StringLit{
+            input: self.input.repeat(), value: self.value.clone()
+        };
+        Box::new(x)
+    }
+}
+
+impl<'a,D> Iterator for StringLit<'a,D> where D: Document {
+    type Item=Entry<D>;
+
+    fn next(&mut self) -> Option<Entry<D>> {
+        self.input.next()?; // ignore any meta information, errors from input.
+        Some(Entry::new(self.value.clone()))
+    }
+}
+
+impl<'a,D> Pipeline<'a,D> for StringLit<'a,D> where D: 'a + Document {
+}
+
+
+pub struct Index<'a,D> where D: Document {
+    input: Input<'a,D>,
+    key: Option<String>,
+    off: Option<isize>,
+}
+
+impl<'a,D> Index<'a,D> where D: Document {
+    pub fn new(input: Input<D>, key: Option<String>, off: Option<isize>)
+        -> Index<D>
     {
-        OpIndex{input, key, off, _data: PhantomData}
+        Index{input, key, off}
     }
 
     fn do_get_shortcut(&self, doc: D) -> Result<D,String> {
-        let key = &self.key.unwrap();
+        let (key, dt) = (self.key.as_ref().unwrap(), doc.doctype());
         if let Some(val) = doc.get(key) {
             Ok(val)
         } else {
-            Err(format!("cannot index {} into {:?}", key, doc.doctype()))
+            Err(format!("cannot index {} into {:?}", key, dt))
         }
     }
 
     fn do_index_shortcut(&self, doc: D) -> Result<D,String> {
-        let off = self.off.unwrap();
+        let (off, dt) = (self.off.unwrap(), doc.doctype());
         if let Some(val) = doc.index(off) {
             Ok(val)
         } else {
-            Err(format!("cannot index {} into {:?}", off, doc.doctype()))
+            Err(format!("cannot index {} into {:?}", off, dt))
         }
     }
 }
 
-impl<D,T,I> Clone for OpIndex<D,T,I>
-    where
-    D: Document, T: Document + From<D>,
-    I: Iterator<Item=Entry<D>> + Clone
-{
-    fn clone(&self) -> OpIndex<D,T,I> {
-        let (input, key) = (self.input.clone(), self.key.clone());
-        OpIndex{input, key, off: self.off.clone(), _data: PhantomData}
+impl<'a,D> Repeater<'a,D> for Index<'a,D> where D: 'a + Document {
+    fn repeat(&self) -> Input<'a,D> {
+        let (key, off) = (self.key.clone(), self.off.clone());
+        let x = Index{input: self.input.repeat(), key, off};
+        Box::new(x)
     }
 }
 
-impl<D,T,I> Iterator for OpIndex<D,T,I>
-    where
-    D: Document, T: Document + From<D>,
-    I: Iterator<Item=Entry<D>> + Clone
-{
-    type Item=Entry<T>;
+impl<'a,D> Iterator for Index<'a,D> where D: Document {
+    type Item=Entry<D>;
 
-    fn next(&mut self) -> Option<Entry<T>> {
+    fn next(&mut self) -> Option<Entry<D>> {
         let mut d_entry = self.input.next()?;
-        if d_entry.has_error() { return Some(d_entry.into()) }
+        if d_entry.has_error() { return Some(d_entry) }
 
-        let res = if let Some(key) = self.key {
+        let res = if let Some(_) = self.key {
             self.do_get_shortcut(d_entry.doc)
 
-        } else if let Some(off) = self.off {
+        } else if let Some(_) = self.off {
             self.do_index_shortcut(d_entry.doc)
 
         } else {
@@ -355,123 +309,124 @@ impl<D,T,I> Iterator for OpIndex<D,T,I>
             Ok(doc) => {d_entry.doc = doc; d_entry},
             Err(s) => {d_entry.doc = D::null(); d_entry.set_error(s); d_entry},
         };
-        Some(d_entry.into())
+        Some(d_entry)
     }
 }
 
+impl<'a,D> Pipeline<'a,D> for Index<'a,D> where D: 'a + Document {
+}
 
-impl<D,T,I> OpIdentifier<D,T,I>
-    where
-    D: Document, T: Document + From<D>,
-    I: Iterator<Item=Entry<D>> + Clone
-{
-    pub fn new(input: I, symbol: String, _: T) -> OpIdentifier<D,T,I> {
+
+pub struct Identifier<'a,D> where D: Document {
+    input: Input<'a,D>,
+    symbol: String,
+    index: Option<isize>,
+}
+
+impl<'a,D> Identifier<'a,D> where D: Document {
+    pub fn new(input: Input<D>, symbol: String) -> Identifier<D> {
         let index = symbol.parse().ok();
-        OpIdentifier{input, symbol, index, _data: PhantomData}
+        Identifier{input, symbol, index}
     }
 
     fn do_lookup(&self, doc: D) -> Result<D,String> {
-        if let Some(val) = doc.get(&self.symbol) {
-            return Ok(val)
+        let dt = doc.doctype();
+        if let Some(val) = doc.get_ref(&self.symbol) {
+            return Ok(val.clone())
         } else if let Some(off) = self.index {
-            if let Some(val) = doc.index(off) { return Ok(val) }
+            if let Some(val) = doc.index_ref(off) { return Ok(val.clone()) }
         }
-        Err(format!("cannot index {} into {:?}", self.symbol, doc.doctype()))
+        Err(format!("cannot index {} into {:?}", self.symbol, dt))
     }
 }
 
-impl<D,T,I> Clone for OpIdentifier<D,T,I>
-    where
-    D: Document, T: Document + From<D>,
-    I: Iterator<Item=Entry<D>> + Clone
-{
-    fn clone(&self) -> OpIdentifier<D,T,I> {
-        let (input, symbol) = (self.input.clone(), self.symbol.clone());
-        let index = self.index.clone();
-        OpIdentifier{input, symbol, index, _data: PhantomData}
+impl<'a,D> Repeater<'a,D> for Identifier<'a,D> where D: 'a + Document {
+    fn repeat(&self) -> Input<'a,D> {
+        let input = self.input.repeat();
+        let (symbol, index) = (self.symbol.clone(), self.index.clone());
+        let x = Identifier{input, symbol, index};
+        Box::new(x)
     }
 }
 
-impl<D,T,I> Iterator for OpIdentifier<D,T,I>
-    where
-    D: Document, T: Document + From<D>,
-    I: Iterator<Item=Entry<D>> + Clone
-{
-    type Item=Entry<T>;
+impl<'a,D> Iterator for Identifier<'a,D> where D: Document {
+    type Item=Entry<D>;
 
-    fn next(&mut self) -> Option<Entry<T>> {
+    fn next(&mut self) -> Option<Entry<D>> {
         let mut d_entry = self.input.next()?;
-        if d_entry.has_error() { return Some(d_entry.into()) }
+        if d_entry.has_error() { return Some(d_entry) }
 
         match self.do_lookup(d_entry.doc) {
             Ok(doc) => {d_entry.doc = doc},
             Err(s) => {d_entry.doc = D::null(); d_entry.set_error(s)},
         }
-        Some(d_entry.into())
+        Some(d_entry)
     }
 }
 
+impl<'a,D> Pipeline<'a,D> for Identifier<'a,D> where D: 'a + Document {
+}
 
-impl<D,T,I> OpSlice<D,T,I>
-    where
-    D: Document, T: Document + From<D>,
-    I: Iterator<Item=Entry<D>> + Clone
-{
-    pub fn new(input: I, start: isize, end: isize, _: T) -> OpSlice<D,T,I> {
-        OpSlice{input, start, end, _data: PhantomData}
+
+pub struct Slice<'a,D> where D: Document {
+    input: Input<'a,D>,
+    start: isize,
+    end: isize,
+}
+
+impl<'a,D> Slice<'a,D> where D: Document {
+    pub fn new(input: Input<D>, start: isize, end: isize) -> Slice<D> {
+        Slice{input, start, end}
     }
 }
 
-impl<D,T,I> Clone for OpSlice<D,T,I>
-    where
-    D: Document, T: Document + From<D>,
-    I: Iterator<Item=Entry<D>> + Clone
-{
-    fn clone(&self) -> OpSlice<D,T,I> {
-        let (input, start, end) = (self.input.clone(), self.start, self.end);
-        OpSlice{input, start, end, _data: PhantomData}
+impl<'a,D> Repeater<'a,D> for Slice<'a,D> where D: 'a + Document {
+    fn repeat(&self) -> Input<'a,D> {
+        let (start, end) = (self.start, self.end);
+        let x = Slice{ input: self.input.repeat(), start, end };
+        Box::new(x)
     }
 }
 
-impl<D,T,I> Iterator for OpSlice<D,T,I>
-    where
-    D: Document, T: Document + From<D>,
-    I: Iterator<Item=Entry<D>> + Clone
-{
-    type Item=Entry<T>;
+impl<'a,D> Iterator for Slice<'a,D> where D: Document {
+    type Item=Entry<D>;
 
-    fn next(&mut self) -> Option<Entry<T>> {
+    fn next(&mut self) -> Option<Entry<D>> {
         let mut d_entry = self.input.next()?;
-        if d_entry.has_error() { return Some(d_entry.into()) }
+        if d_entry.has_error() { return Some(d_entry) }
 
         let dt = d_entry.doc.doctype();
-        let d_entry = match d_entry.doc.slice(self.start, self.end) {
+        let d_entry = match d_entry.doc.clone().slice(self.start, self.end) {
             Some(doc) => { d_entry.doc = doc; d_entry },
             None => {
                 d_entry.set_error(format!("cannot slice {:?}", dt));
                 d_entry
             },
         };
-        Some(d_entry.into())
+        Some(d_entry)
     }
 }
 
+impl<'a,D> Pipeline<'a,D> for Slice<'a,D> where D: 'a + Document {
+}
 
-impl<D,T,I> OpItervalues<D,T,I>
-    where
-    D: Document, T: Document + From<D>,
-    I: Iterator<Item=Entry<D>> + Clone
-{
-    pub fn new(input: I, _: T) -> OpItervalues<D,T,I> {
-        OpItervalues{input, iter: None, _data: PhantomData}
+
+pub struct IterValues<'a,D> where D: Document {
+    input: Input<'a,D>,
+    iter: Option<vec::IntoIter<Entry<D>>>,
+}
+
+impl<'a,D> IterValues<'a,D> where D: Document {
+    pub fn new(input: Input<D>) -> IterValues<D> {
+        IterValues{input, iter: None}
     }
 
-    pub fn iter_values(&self) -> Option<Vec<Entry<D>>> {
+    fn iter_values(&mut self) -> Option<Vec<Entry<D>>> {
         let mut d_entry = self.input.next()?;
         if d_entry.has_error() { return Some(vec![d_entry]) }
 
         let dt = d_entry.doc.doctype();
-        let mut entries = match docvalues(d_entry.doc.clone()) {
+        let entries = match docvalues(d_entry.doc.clone()) {
             Some(values) => {
                 values.into_iter()
                     .map(|doc| Entry::new_with_meta(d_entry.meta.clone(), doc))
@@ -486,34 +441,27 @@ impl<D,T,I> OpItervalues<D,T,I>
     }
 }
 
-impl<D,T,I> Clone for OpItervalues<D,T,I>
-    where
-    D: Document, T: Document + From<D>,
-    I: Iterator<Item=Entry<D>> + Clone
-{
-    fn clone(&self) -> OpItervalues<D,T,I> {
-        if self.iter.is_some() {
-            panic!("cannot clone OpItervalues after starting the iteration");
+impl<'a,D> Repeater<'a,D> for IterValues<'a,D> where D: 'a + Document {
+    fn repeat(&self) -> Input<'a,D> {
+        if let Some(_) = self.iter {
+            panic!("cannot repeat IterValues after the statement is prepared");
         }
-        OpItervalues{input: self.input.clone(), iter: None, _data: PhantomData}
+        let x = IterValues{ input: self.input.repeat(), iter: None };
+        Box::new(x)
     }
 }
 
-impl<D,T,I> Iterator for OpItervalues<D,T,I>
-    where
-    D: Document, T: Document + From<D>,
-    I: Iterator<Item=Entry<D>> + Clone
-{
-    type Item=Entry<T>;
+impl<'a,D> Iterator for IterValues<'a,D> where D: Document {
+    type Item=Entry<D>;
 
-    fn next(&mut self) -> Option<Entry<T>> {
+    fn next(&mut self) -> Option<Entry<D>> {
         if self.iter.is_none() {
             let entries = self.iter_values()?;
             self.iter = Some(entries.into_iter());
         }
 
         let d_entry = loop {
-            match self.iter.unwrap().next() {
+            match self.iter.as_mut().unwrap().next() {
                 Some(entry) => break entry,
                 None => {
                     let entries = self.iter_values()?;
@@ -521,24 +469,29 @@ impl<D,T,I> Iterator for OpItervalues<D,T,I>
                 },
             }
         };
-        Some(d_entry.into())
+        Some(d_entry)
     }
 }
 
+impl<'a,D> Pipeline<'a,D> for IterValues<'a,D> where D: 'a + Document {
+}
 
-impl<D,T,I> OpIter<D,T,I>
-    where
-    D: Document, T: Document + From<D>,
-    I: Iterator<Item=Entry<D>> + Clone
-{
-    pub fn new(inputs: Vec<I>, _: T) -> OpIter<D,T,I> {
-        OpIter{inputs, done: false, iter: None, _data: PhantomData}
+
+pub struct Iter<'a,D> where D: Document {
+    inputs: Vec<Input<'a,D>>,
+    done: bool,
+    iter: Option<vec::IntoIter<Entry<D>>>,
+}
+
+impl<'a,D> Iter<'a,D> where D: Document {
+    pub fn new(inputs: Vec<Input<D>>) -> Iter<D> {
+        Iter{inputs, done: false, iter: None}
     }
 
-    pub fn iter_entries(&mut self) -> Option<Vec<Entry<D>>> {
+    fn iter_entries(&mut self) -> Option<Vec<Entry<D>>> {
         let mut entries = Vec::new();
         let mut n = self.inputs.len();
-        for input in self.inputs.iter() {
+        for input in self.inputs.iter_mut() {
             match input.next() {
                 Some(entry) => entries.push(entry),
                 None => { n -= 1; entries.push(Entry::new(D::null())) },
@@ -548,28 +501,21 @@ impl<D,T,I> OpIter<D,T,I>
     }
 }
 
-impl<D,T,I> Clone for OpIter<D,T,I>
-    where
-    D: Document, T: Document + From<D>,
-    I: Iterator<Item=Entry<D>> + Clone
-{
-    fn clone(&self) -> OpIter<D,T,I> {
-        if self.iter.is_some() {
-            panic!("cannot clone OpRecurse after starting the iteration");
+impl<'a,D> Repeater<'a,D> for Iter<'a,D> where D: 'a + Document {
+    fn repeat(&self) -> Input<'a,D> {
+        if let Some(_) = self.iter {
+            panic!("cannot repeat Iter after the statement is prepared");
         }
-        let inputs = self.inputs.clone();
-        OpIter{inputs, done: self.done, iter: None, _data: PhantomData}
+        let (done, iter) = (false, None);
+        let inputs = self.inputs.iter().map(|input| input.repeat()).collect();
+        Box::new(Iter{ inputs, done, iter })
     }
 }
 
-impl<D,T,I> Iterator for OpIter<D,T,I>
-    where
-    D: Document, T: Document + From<D>,
-    I: Iterator<Item=Entry<D>> + Clone
-{
-    type Item=Entry<T>;
+impl<'a,D> Iterator for Iter<'a,D> where D: Document {
+    type Item=Entry<D>;
 
-    fn next(&mut self) -> Option<Entry<T>> {
+    fn next(&mut self) -> Option<Entry<D>> {
         if self.done { return None }
 
         if self.iter.is_none() {
@@ -578,7 +524,7 @@ impl<D,T,I> Iterator for OpIter<D,T,I>
         }
 
         let d_entry = loop {
-            match self.iter.unwrap().next() {
+            match self.iter.as_mut().unwrap().next() {
                 Some(entry) => break entry,
                 None => {
                     let entries = self.iter_entries()?;
@@ -586,21 +532,24 @@ impl<D,T,I> Iterator for OpIter<D,T,I>
                 },
             }
         };
-        Some(d_entry.into())
+        Some(d_entry)
     }
 }
 
+impl<'a,D> Pipeline<'a,D> for Iter<'a,D> where D: 'a + Document {
+}
 
-impl<D,T,I> OpList<D,T,I>
-    where
-    D: Document, T: Document + From<D>,
-    I: Iterator<Item=Entry<D>> + Clone
-{
-    pub fn new(inputs: Vec<I>, _: T) -> OpList<D,T,I> {
-        OpList{inputs, _data: PhantomData}
+
+pub struct List<'a,D> where D: Document {
+    inputs: Vec<Input<'a,D>>,
+}
+
+impl<'a,D> List<'a,D> where D: Document {
+    pub fn new(inputs: Vec<Input<D>>) -> List<D> {
+        List{inputs}
     }
 
-    pub fn next_entries(&mut self) -> Option<Vec<Entry<D>>> {
+    fn next_entries(&mut self) -> Option<Vec<Entry<D>>> {
         let mut entries: Vec<Entry<D>> = Vec::new();
         let mut n = self.inputs.len();
         for input in self.inputs.iter_mut() {
@@ -625,46 +574,44 @@ impl<D,T,I> OpList<D,T,I>
     }
 }
 
-impl<D,T,I> Clone for OpList<D,T,I>
-    where
-    D: Document, T: Document + From<D>,
-    I: Iterator<Item=Entry<D>> + Clone
-{
-    fn clone(&self) -> OpList<D,T,I> {
-        OpList{inputs: self.inputs.clone(), _data: PhantomData}
+impl<'a,D> Repeater<'a,D> for List<'a,D> where D: 'a + Document {
+    fn repeat(&self) -> Input<'a,D> {
+        let inputs = self.inputs.iter().map(|input| input.repeat()).collect();
+        Box::new(List{ inputs })
     }
 }
 
-impl<D,T,I> Iterator for OpList<D,T,I>
-    where
-    D: Document, T: Document + From<D>,
-    I: Iterator<Item=Entry<D>> + Clone
-{
-    type Item=Entry<T>;
 
-    fn next(&mut self) -> Option<Entry<T>> {
+impl<'a,D> Iterator for List<'a,D> where D: Document {
+    type Item=Entry<D>;
+
+    fn next(&mut self) -> Option<Entry<D>> {
         let entries = self.next_entries()?;
         let values: Vec<D> = entries.iter().map(|e| e.doc.clone()).collect();
         let d_entry = Entry::new_merged(entries, From::from(values));
-        Some(d_entry.into())
+        Some(d_entry)
     }
 }
 
+impl<'a,D> Pipeline<'a,D> for List<'a,D> where D: 'a + Document {
+}
 
-impl<D,T,I> OpDict<D,T,I>
-    where
-    D: Document, T: Document + From<D>,
-    I: Iterator<Item=Entry<D>> + Clone
-{
-    pub fn new(inputs: Vec<(I,I)>, _: T) -> OpDict<D,T,I> {
-        OpDict{inputs, iter: None, _data: PhantomData}
+
+pub struct Dict<'a,D> where D: Document {
+    inputs: Vec<(Input<'a,D>, Input<'a,D>)>,
+    iter: Option<vec::IntoIter<Entry<D>>>,
+}
+
+impl<'a,D> Dict<'a,D> where D: Document {
+    pub fn new(inputs: Vec<(Input<'a,D>,Input<'a,D>)>) -> Dict<'a,D> {
+        Dict{inputs, iter: None}
     }
 
-    fn collect_prop(&self, kinput: &I, vinput: &I)
+    fn collect_prop(kinput: &mut Input<D>, vinput: &mut Input<D>)
         -> Option<Vec<(Entry<D>, Vec<Entry<D>>)>>
     {
         // gather keys
-        let keys = Vec::new();
+        let mut keys = Vec::new();
         loop {
             match kinput.next() {
                 Some(entry) => match entry.iter_position() {
@@ -680,7 +627,7 @@ impl<D,T,I> OpDict<D,T,I>
         if keys.len() == 0 { return None }
 
         // gather values
-        let values = Vec::new();
+        let mut values = Vec::new();
         loop {
             match vinput.next() {
                 Some(entry) => match entry.iter_position() {
@@ -703,11 +650,11 @@ impl<D,T,I> OpDict<D,T,I>
         Some(props)
     }
 
-    fn collect_props(&self) -> Option<Vec<(Entry<D>, Vec<Entry<D>>)>> {
+    fn collect_props(&mut self) -> Option<Vec<(Entry<D>, Vec<Entry<D>>)>> {
         let mut props = Vec::new();
         let mut n = self.inputs.len();
-        for (kinput, vinput) in self.inputs.iter() {
-            match self.collect_prop(kinput, vinput) {
+        for (kinput, vinput) in self.inputs.iter_mut() {
+            match Self::collect_prop(kinput, vinput) {
                 Some(mut sub_props) => props.append(&mut sub_props),
                 None => { n -= 1; },
             }
@@ -715,7 +662,7 @@ impl<D,T,I> OpDict<D,T,I>
         if n > 0 { Some(props) } else { None }
     }
 
-    fn collect_dict(bp: Vec<(Entry<D>, Vec<Entry<D>>)>)
+    fn collect_dict(mut bp: Vec<(Entry<D>, Vec<Entry<D>>)>)
         -> Vec<Vec<(Entry<D>, Entry<D>)>>
     {
         let (key, values) = bp.remove(0);
@@ -727,22 +674,22 @@ impl<D,T,I> OpDict<D,T,I>
             iter::repeat(tail).take(values.len()).collect();
         for (i, value) in values.into_iter().enumerate() {
             for dict in dict_lists[i].iter_mut() {
-                dict.push((key.clone(), value))
+                dict.push((key.clone(), value.clone()))
             }
         }
         dict_lists.into_iter().flatten().collect()
     }
 
-    fn next_props(&self) -> Option<Vec<Entry<D>>> {
+    fn next_props(&mut self) -> Option<Vec<Entry<D>>> {
         let bp = self.collect_props()?;
-        let full = Vec::new();
+        let mut full = Vec::new();
         for dict in Self::collect_dict(bp).into_iter() {
-            let entries: Vec<Entry<D>> = Vec::new();
-            let keys: Vec<String> = Vec::new();
-            let values: Vec<D> = Vec::new();
+            let mut entries: Vec<Entry<D>> = Vec::new();
+            let mut keys: Vec<String> = Vec::new();
+            let mut values: Vec<D> = Vec::new();
             for (kentry, ventry) in dict {
-                entries.push(kentry);
-                entries.push(ventry);
+                entries.push(kentry.clone());
+                entries.push(ventry.clone());
                 if kentry.has_error() || ventry.has_error() { continue }
                 match kentry.doc.string() {
                     Some(s) => { keys.push(s); values.push(ventry.doc) },
@@ -757,829 +704,751 @@ impl<D,T,I> OpDict<D,T,I>
     }
 }
 
-impl<D,T,I> Clone for OpDict<D,T,I>
-    where
-    D: Document, T: Document + From<D>,
-    I: Iterator<Item=Entry<D>> + Clone
-{
-    fn clone(&self) -> OpDict<D,T,I> {
-        if self.iter.is_some() {
-            panic!("cannot clone OpRecurse after starting the iteration");
+impl<'a,D> Repeater<'a,D> for Dict<'a,D> where D: 'a + Document {
+    fn repeat(&self) -> Input<'a,D> {
+        if let Some(_) = self.iter {
+            panic!("cannot repeat Dict after the statement is prepared");
         }
-        OpDict{inputs: self.inputs.clone(), iter: None, _data: PhantomData}
+        let inputs = self.inputs.iter().map(|(ki,vi)| {
+            (ki.repeat(), vi.repeat())
+        }).collect();
+        Box::new(Dict{ inputs, iter: None })
     }
 }
 
-impl<D,T,I> Iterator for OpDict<D,T,I>
-    where
-    D: Document, T: Document + From<D>,
-    I: Iterator<Item=Entry<D>> + Clone
-{
-    type Item=Entry<T>;
+impl<'a,D> Iterator for Dict<'a,D> where D: Document {
+    type Item=Entry<D>;
 
-    fn next(&mut self) -> Option<Entry<T>> {
+    fn next(&mut self) -> Option<Entry<D>> {
         if let None = self.iter {
             self.iter = Some(self.next_props()?.into_iter());
         }
 
         let entry = loop {
-            match self.iter.unwrap().next() {
+            match self.iter.as_mut().unwrap().next() {
                 Some(entry) => break entry,
                 None => { self.iter = Some(self.next_props()?.into_iter()); },
             }
         };
-        Some(entry.into())
+        Some(entry)
     }
 
 }
 
-
-impl<D,T,I> OpNeg<D,T,I>
-    where
-    D: Document, T: Document + From<D>,
-    I: Iterator<Item=Entry<D>> + Clone
-{
-    pub fn new(input: I, _: T) -> OpNeg<D,T,I> {
-        OpNeg{input, _data: PhantomData}
-    }
-}
-
-impl<D,T,I> Clone for OpNeg<D,T,I>
-    where
-    D: Document, T: Document + From<D>,
-    I: Iterator<Item=Entry<D>> + Clone
-{
-    fn clone(&self) -> OpNeg<D,T,I> {
-        OpNeg{input: self.input.clone(), _data: PhantomData}
-    }
-}
-
-impl<D,T,I> Iterator for OpNeg<D,T,I>
-    where
-    D: Document, T: Document + From<D>,
-    I: Iterator<Item=Entry<D>> + Clone
-{
-    type Item=Entry<T>;
-
-    fn next(&mut self) -> Option<Entry<T>> {
-        let d_entry = self.input.next()?;
-        d_entry.doc = -d_entry.doc;
-        Some(d_entry.into())
-    }
+impl<'a,D> Pipeline<'a,D> for Dict<'a,D> where D: 'a + Document {
 }
 
 
-impl<D,T,I> OpNot<D,T,I>
-    where
-    D: Document, T: Document + From<D>,
-    I: Iterator<Item=Entry<D>> + Clone
-{
-    pub fn new(input: I, _: T) -> OpNot<D,T,I> {
-        OpNot{input, _data: PhantomData}
+pub struct Neg<'a,D> where D: Document {
+    input: Input<'a,D>,
+}
+
+impl<'a,D> Neg<'a,D> where D: Document {
+    pub fn new(input: Input<D>) -> Neg<D> {
+        Neg{input}
     }
 }
 
-impl<D,T,I> Clone for OpNot<D,T,I>
-    where
-    D: Document, T: Document + From<D>,
-    I: Iterator<Item=Entry<D>> + Clone
-{
-    fn clone(&self) -> OpNot<D,T,I> {
-        OpNot{input: self.input.clone(), _data: PhantomData}
+impl<'a,D> Repeater<'a,D> for Neg<'a,D> where D: 'a + Document {
+    fn repeat(&self) -> Input<'a,D> {
+        let x = Neg{input: self.input.repeat()};
+        Box::new(x)
     }
 }
 
-impl<D,T,I> Iterator for OpNot<D,T,I>
-    where
-    D: Document, T: Document + From<D>,
-    I: Iterator<Item=Entry<D>> + Clone
-{
-    type Item=Entry<T>;
+impl<'a,D> Iterator for Neg<'a,D> where D: Document {
+    type Item=Entry<D>;
 
-    fn next(&mut self) -> Option<Entry<T>> {
-        let d_entry = self.input.next()?;
-        d_entry.doc = !d_entry.doc;
-        Some(d_entry.into())
+    fn next(&mut self) -> Option<Entry<D>> {
+        let mut d_entry = self.input.next()?;
+        let doc = d_entry.doc;
+        d_entry.doc = -doc;
+        Some(d_entry)
     }
 }
 
+impl<'a,D> Pipeline<'a,D> for Neg<'a,D> where D: 'a + Document {
+}
 
-impl<D,T,I> OpMult<D,T,I>
-    where
-    D: Document, T: Document + From<D>,
-    I: Iterator<Item=Entry<D>> + Clone
-{
-    pub fn new(lhs: I, rhs: I, _: T) -> OpMult<D,T,I> {
-        OpMult{lhs, rhs, _data: PhantomData}
+
+pub struct Not<'a,D> where D: Document {
+    input: Input<'a,D>,
+}
+
+impl<'a,D> Not<'a,D> where D: Document {
+    pub fn new(input: Input<D>) -> Not<D> {
+        Not{input}
     }
 }
 
-impl<D,T,I> Clone for OpMult<D,T,I>
-    where
-    D: Document, T: Document + From<D>,
-    I: Iterator<Item=Entry<D>> + Clone
-{
-    fn clone(&self) -> OpMult<D,T,I> {
-        OpMult{lhs: self.lhs.clone(), rhs: self.rhs.clone(), _data: PhantomData}
+impl<'a,D> Repeater<'a,D> for Not<'a,D> where D: 'a + Document {
+    fn repeat(&self) -> Input<'a,D> {
+        let x = Not{input: self.input.repeat()};
+        Box::new(x)
     }
 }
 
-impl<D,T,I> Iterator for OpMult<D,T,I>
-    where
-    D: Document, T: Document + From<D>,
-    I: Iterator<Item=Entry<D>> + Clone
-{
-    type Item=Entry<T>;
+impl<'a,D> Iterator for Not<'a,D> where D: Document {
+    type Item=Entry<D>;
 
-    fn next(&mut self) -> Option<Entry<T>> {
+    fn next(&mut self) -> Option<Entry<D>> {
+        let mut d_entry = self.input.next()?;
+        let doc = d_entry.doc;
+        d_entry.doc = !doc;
+        Some(d_entry)
+    }
+}
+
+impl<'a,D> Pipeline<'a,D> for Not<'a,D> where D: 'a + Document {
+}
+
+
+pub struct Mul<'a,D> where D: Document {
+    lhs: Input<'a,D>,
+    rhs: Input<'a,D>,
+}
+
+impl<'a,D> Mul<'a,D> where D: Document {
+    pub fn new(lhs: Input<'a,D>, rhs: Input<'a,D>) -> Mul<'a,D> {
+        Mul{lhs, rhs}
+    }
+}
+
+impl<'a,D> Repeater<'a,D> for Mul<'a,D> where D: 'a + Document {
+    fn repeat(&self) -> Input<'a,D> {
+        let x = Mul{ lhs: self.lhs.repeat(), rhs: self.rhs.repeat() };
+        Box::new(x)
+    }
+}
+
+impl<'a,D> Iterator for Mul<'a,D> where D: Document {
+    type Item=Entry<D>;
+
+    fn next(&mut self) -> Option<Entry<D>> {
         let d_lhs = self.lhs.next()?;
         let d_rhs = self.rhs.next()?;
+        let doc = d_lhs.doc.clone() * d_rhs.doc.clone();
         let entries = vec![d_lhs, d_rhs];
-        let doc = d_lhs.doc * d_rhs.doc;
-        Some(Entry::new_merged(entries, doc).into())
+        Some(Entry::new_merged(entries, doc))
     }
 }
 
+impl<'a,D> Pipeline<'a,D> for Mul<'a,D> where D: 'a + Document {
+}
 
-impl<D,T,I> OpDiv<D,T,I>
-    where
-    D: Document, T: Document + From<D>,
-    I: Iterator<Item=Entry<D>> + Clone
-{
-    pub fn new(lhs: I, rhs: I, _: T) -> OpDiv<D,T,I> {
-        OpDiv{lhs, rhs, _data: PhantomData}
+
+pub struct Div<'a,D> where D: Document {
+    lhs: Input<'a,D>,
+    rhs: Input<'a,D>,
+}
+
+impl<'a,D> Div<'a,D> where D: Document {
+    pub fn new(lhs: Input<'a,D>, rhs: Input<'a,D>) -> Div<'a,D> {
+        Div{lhs, rhs}
     }
 }
 
-impl<D,T,I> Clone for OpDiv<D,T,I>
-    where
-    D: Document, T: Document + From<D>,
-    I: Iterator<Item=Entry<D>> + Clone
-{
-    fn clone(&self) -> OpDiv<D,T,I> {
-        OpDiv{lhs: self.lhs.clone(), rhs: self.rhs.clone(), _data: PhantomData}
+impl<'a,D> Repeater<'a,D> for Div<'a,D> where D: 'a + Document {
+    fn repeat(&self) -> Input<'a,D> {
+        let x = Div{ lhs: self.lhs.repeat(), rhs: self.rhs.repeat() };
+        Box::new(x)
     }
 }
 
-impl<D,T,I> Iterator for OpDiv<D,T,I>
-    where
-    D: Document, T: Document + From<D>,
-    I: Iterator<Item=Entry<D>> + Clone
-{
-    type Item=Entry<T>;
+impl<'a,D> Iterator for Div<'a,D> where D: Document {
+    type Item=Entry<D>;
 
-    fn next(&mut self) -> Option<Entry<T>> {
+    fn next(&mut self) -> Option<Entry<D>> {
         let d_lhs = self.lhs.next()?;
         let d_rhs = self.rhs.next()?;
+        let doc = d_lhs.doc.clone() / d_rhs.doc.clone();
         let entries = vec![d_lhs, d_rhs];
-        let doc = d_lhs.doc / d_rhs.doc;
-        Some(Entry::new_merged(entries, doc).into())
+        Some(Entry::new_merged(entries, doc))
     }
 }
 
+impl<'a,D> Pipeline<'a,D> for Div<'a,D> where D: 'a + Document {
+}
 
-impl<D,T,I> OpRem<D,T,I>
-    where
-    D: Document, T: Document + From<D>,
-    I: Iterator<Item=Entry<D>> + Clone
-{
-    pub fn new(lhs: I, rhs: I, _: T) -> OpRem<D,T,I> {
-        OpRem{lhs, rhs, _data: PhantomData}
+
+pub struct Rem<'a,D> where D: Document {
+    lhs: Input<'a,D>,
+    rhs: Input<'a,D>,
+}
+
+impl<'a,D> Rem<'a,D> where D: Document {
+    pub fn new(lhs: Input<'a,D>, rhs: Input<'a,D>) -> Rem<'a,D> {
+        Rem{lhs, rhs}
     }
 }
 
-impl<D,T,I> Clone for OpRem<D,T,I>
-    where
-    D: Document, T: Document + From<D>,
-    I: Iterator<Item=Entry<D>> + Clone
-{
-    fn clone(&self) -> OpRem<D,T,I> {
-        OpRem{lhs: self.lhs.clone(), rhs: self.rhs.clone(), _data: PhantomData}
+impl<'a,D> Repeater<'a,D> for Rem<'a,D> where D: 'a + Document {
+    fn repeat(&self) -> Input<'a,D> {
+        let x = Rem{ lhs: self.lhs.repeat(), rhs: self.rhs.repeat() };
+        Box::new(x)
     }
 }
 
-impl<D,T,I> Iterator for OpRem<D,T,I>
-    where
-    D: Document, T: Document + From<D>,
-    I: Iterator<Item=Entry<D>> + Clone
-{
-    type Item=Entry<T>;
+impl<'a,D> Iterator for Rem<'a,D> where D: Document {
+    type Item=Entry<D>;
 
-    fn next(&mut self) -> Option<Entry<T>> {
+    fn next(&mut self) -> Option<Entry<D>> {
         let d_lhs = self.lhs.next()?;
         let d_rhs = self.rhs.next()?;
+        let doc = d_lhs.doc.clone() % d_rhs.doc.clone();
         let entries = vec![d_lhs, d_rhs];
-        let doc = d_lhs.doc % d_rhs.doc;
-        Some(Entry::new_merged(entries, doc).into())
+        Some(Entry::new_merged(entries, doc))
     }
 }
 
+impl<'a,D> Pipeline<'a,D> for Rem<'a,D> where D: 'a + Document {
+}
 
-impl<D,T,I> OpAdd<D,T,I>
-    where
-    D: Document, T: Document + From<D>,
-    I: Iterator<Item=Entry<D>> + Clone
-{
-    pub fn new(lhs: I, rhs: I, _: T) -> OpAdd<D,T,I> {
-        OpAdd{lhs, rhs, _data: PhantomData}
+
+pub struct Add<'a,D> where D: Document {
+    lhs: Input<'a,D>,
+    rhs: Input<'a,D>,
+}
+
+impl<'a,D> Add<'a,D> where D: Document {
+    pub fn new(lhs: Input<'a,D>, rhs: Input<'a,D>) -> Add<'a,D> {
+        Add{lhs, rhs}
     }
 }
 
-impl<D,T,I> Clone for OpAdd<D,T,I>
-    where
-    D: Document, T: Document + From<D>,
-    I: Iterator<Item=Entry<D>> + Clone
-{
-    fn clone(&self) -> OpAdd<D,T,I> {
-        OpAdd{lhs: self.lhs.clone(), rhs: self.rhs.clone(), _data: PhantomData}
+impl<'a,D> Repeater<'a,D> for Add<'a,D> where D: 'a + Document {
+    fn repeat(&self) -> Input<'a,D> {
+        let x = Add{ lhs: self.lhs.repeat(), rhs: self.rhs.repeat() };
+        Box::new(x)
     }
 }
 
-impl<D,T,I> Iterator for OpAdd<D,T,I>
-    where
-    D: Document, T: Document + From<D>,
-    I: Iterator<Item=Entry<D>> + Clone
-{
-    type Item=Entry<T>;
+impl<'a,D> Iterator for Add<'a,D> where D: Document {
+    type Item=Entry<D>;
 
-    fn next(&mut self) -> Option<Entry<T>> {
+    fn next(&mut self) -> Option<Entry<D>> {
         let d_lhs = self.lhs.next()?;
         let d_rhs = self.rhs.next()?;
+        let doc = d_lhs.doc.clone() + d_rhs.doc.clone();
         let entries = vec![d_lhs, d_rhs];
-        let doc = d_lhs.doc + d_rhs.doc;
-        Some(Entry::new_merged(entries, doc).into())
+        Some(Entry::new_merged(entries, doc))
     }
 }
 
+impl<'a,D> Pipeline<'a,D> for Add<'a,D> where D: 'a + Document {
+}
 
-impl<D,T,I> OpSub<D,T,I>
-    where
-    D: Document, T: Document + From<D>,
-    I: Iterator<Item=Entry<D>> + Clone
-{
-    pub fn new(lhs: I, rhs: I, _: T) -> OpSub<D,T,I> {
-        OpSub{lhs, rhs, _data: PhantomData}
+
+pub struct Sub<'a,D> where D: Document {
+    lhs: Input<'a,D>,
+    rhs: Input<'a,D>,
+}
+
+impl<'a,D> Sub<'a,D> where D: Document {
+    pub fn new(lhs: Input<'a,D>, rhs: Input<'a,D>) -> Sub<'a,D> {
+        Sub{lhs, rhs}
     }
 }
 
-impl<D,T,I> Clone for OpSub<D,T,I>
-    where
-    D: Document, T: Document + From<D>,
-    I: Iterator<Item=Entry<D>> + Clone
-{
-    fn clone(&self) -> OpSub<D,T,I> {
-        OpSub{lhs: self.lhs.clone(), rhs: self.rhs.clone(), _data: PhantomData}
+impl<'a,D> Repeater<'a,D> for Sub<'a,D> where D: 'a + Document {
+    fn repeat(&self) -> Input<'a,D> {
+        let x = Sub{ lhs: self.lhs.repeat(), rhs: self.rhs.repeat() };
+        Box::new(x)
     }
 }
 
-impl<D,T,I> Iterator for OpSub<D,T,I>
-    where
-    D: Document, T: Document + From<D>,
-    I: Iterator<Item=Entry<D>> + Clone
-{
-    type Item=Entry<T>;
+impl<'a,D> Iterator for Sub<'a,D> where D: Document {
+    type Item=Entry<D>;
 
-    fn next(&mut self) -> Option<Entry<T>> {
+    fn next(&mut self) -> Option<Entry<D>> {
         let d_lhs = self.lhs.next()?;
         let d_rhs = self.rhs.next()?;
+        let doc = d_lhs.doc.clone() - d_rhs.doc.clone();
         let entries = vec![d_lhs, d_rhs];
-        let doc = d_lhs.doc - d_rhs.doc;
-        Some(Entry::new_merged(entries, doc).into())
+        Some(Entry::new_merged(entries, doc))
     }
 }
 
+impl<'a,D> Pipeline<'a,D> for Sub<'a,D> where D: 'a + Document {
+}
 
-impl<D,T,I> OpShr<D,T,I>
-    where
-    D: Document, T: Document + From<D>,
-    I: Iterator<Item=Entry<D>> + Clone
-{
-    pub fn new(lhs: I, rhs: I, _: T) -> OpShr<D,T,I> {
-        OpShr{lhs, rhs, _data: PhantomData}
+
+pub struct Shr<'a,D> where D: Document {
+    lhs: Input<'a,D>,
+    rhs: Input<'a,D>,
+}
+
+impl<'a,D> Shr<'a,D> where D: Document {
+    pub fn new(lhs: Input<'a,D>, rhs: Input<'a,D>) -> Shr<'a,D> {
+        Shr{lhs, rhs}
     }
 }
 
-impl<D,T,I> Clone for OpShr<D,T,I>
-    where
-    D: Document, T: Document + From<D>,
-    I: Iterator<Item=Entry<D>> + Clone
-{
-    fn clone(&self) -> OpShr<D,T,I> {
-        OpShr{lhs: self.lhs.clone(), rhs: self.rhs.clone(), _data: PhantomData}
+impl<'a,D> Repeater<'a,D> for Shr<'a,D> where D: 'a + Document {
+    fn repeat(&self) -> Input<'a,D> {
+        let x = Shr{ lhs: self.lhs.repeat(), rhs: self.rhs.repeat() };
+        Box::new(x)
     }
 }
 
-impl<D,T,I> Iterator for OpShr<D,T,I>
-    where
-    D: Document, T: Document + From<D>,
-    I: Iterator<Item=Entry<D>> + Clone
-{
-    type Item=Entry<T>;
+impl<'a,D> Iterator for Shr<'a,D> where D: Document {
+    type Item=Entry<D>;
 
-    fn next(&mut self) -> Option<Entry<T>> {
+    fn next(&mut self) -> Option<Entry<D>> {
         let d_lhs = self.lhs.next()?;
         let d_rhs = self.rhs.next()?;
+        let doc = d_lhs.doc.clone() >> d_rhs.doc.clone();
         let entries = vec![d_lhs, d_rhs];
-        let doc = d_lhs.doc >> d_rhs.doc;
-        Some(Entry::new_merged(entries, doc).into())
+        Some(Entry::new_merged(entries, doc))
     }
 }
 
+impl<'a,D> Pipeline<'a,D> for Shr<'a,D> where D: 'a + Document {
+}
 
-impl<D,T,I> OpShl<D,T,I>
-    where
-    D: Document, T: Document + From<D>,
-    I: Iterator<Item=Entry<D>> + Clone
-{
-    pub fn new(lhs: I, rhs: I, _: T) -> OpShl<D,T,I> {
-        OpShl{lhs, rhs, _data: PhantomData}
+
+pub struct Shl<'a,D> where D: Document {
+    lhs: Input<'a,D>,
+    rhs: Input<'a,D>,
+}
+
+impl<'a,D> Shl<'a,D> where D: Document {
+    pub fn new(lhs: Input<'a,D>, rhs: Input<'a,D>) -> Shl<'a,D> {
+        Shl{lhs, rhs}
     }
 }
 
-impl<D,T,I> Clone for OpShl<D,T,I>
-    where
-    D: Document, T: Document + From<D>,
-    I: Iterator<Item=Entry<D>> + Clone
-{
-    fn clone(&self) -> OpShl<D,T,I> {
-        OpShl{lhs: self.lhs.clone(), rhs: self.rhs.clone(), _data: PhantomData}
+impl<'a,D> Repeater<'a,D> for Shl<'a,D> where D: 'a + Document {
+    fn repeat(&self) -> Input<'a,D> {
+        let x = Shl{ lhs: self.lhs.repeat(), rhs: self.rhs.repeat() };
+        Box::new(x)
     }
 }
 
-impl<D,T,I> Iterator for OpShl<D,T,I>
-    where
-    D: Document, T: Document + From<D>,
-    I: Iterator<Item=Entry<D>> + Clone
-{
-    type Item=Entry<T>;
+impl<'a,D> Iterator for Shl<'a,D> where D: Document {
+    type Item=Entry<D>;
 
-    fn next(&mut self) -> Option<Entry<T>> {
+    fn next(&mut self) -> Option<Entry<D>> {
         let d_lhs = self.lhs.next()?;
         let d_rhs = self.rhs.next()?;
+        let doc = d_lhs.doc.clone() << d_rhs.doc.clone();
         let entries = vec![d_lhs, d_rhs];
-        let doc = d_lhs.doc << d_rhs.doc;
-        Some(Entry::new_merged(entries, doc).into())
+        Some(Entry::new_merged(entries, doc))
     }
 }
 
+impl<'a,D> Pipeline<'a,D> for Shl<'a,D> where D: 'a + Document {
+}
 
-impl<D,T,I> OpBitand<D,T,I>
-    where
-    D: Document, T: Document + From<D>,
-    I: Iterator<Item=Entry<D>> + Clone
-{
-    pub fn new(lhs: I, rhs: I, _: T) -> OpBitand<D,T,I> {
-        OpBitand{lhs, rhs, _data: PhantomData}
+
+pub struct Bitand<'a,D> where D: Document {
+    lhs: Input<'a,D>,
+    rhs: Input<'a,D>,
+}
+
+impl<'a,D> Bitand<'a,D> where D: Document {
+    pub fn new(lhs: Input<'a,D>, rhs: Input<'a,D>) -> Bitand<'a,D> {
+        Bitand{lhs, rhs}
     }
 }
 
-impl<D,T,I> Clone for OpBitand<D,T,I>
-    where
-    D: Document, T: Document + From<D>,
-    I: Iterator<Item=Entry<D>> + Clone
-{
-    fn clone(&self) -> OpBitand<D,T,I> {
-        OpBitand{
-            lhs: self.lhs.clone(), rhs: self.rhs.clone(), _data: PhantomData,
-        }
+impl<'a,D> Repeater<'a,D> for Bitand<'a,D> where D: 'a + Document {
+    fn repeat(&self) -> Input<'a,D> {
+        let x = Bitand{ lhs: self.lhs.repeat(), rhs: self.rhs.repeat() };
+        Box::new(x)
     }
 }
 
-impl<D,T,I> Iterator for OpBitand<D,T,I>
-    where
-    D: Document, T: Document + From<D>,
-    I: Iterator<Item=Entry<D>> + Clone
-{
-    type Item=Entry<T>;
+impl<'a,D> Iterator for Bitand<'a,D> where D: Document {
+    type Item=Entry<D>;
 
-    fn next(&mut self) -> Option<Entry<T>> {
+    fn next(&mut self) -> Option<Entry<D>> {
         let d_lhs = self.lhs.next()?;
         let d_rhs = self.rhs.next()?;
+        let doc = d_lhs.doc.clone() & d_rhs.doc.clone();
         let entries = vec![d_lhs, d_rhs];
-        let doc = d_lhs.doc & d_rhs.doc;
-        Some(Entry::new_merged(entries, doc).into())
+        Some(Entry::new_merged(entries, doc))
     }
 }
 
+impl<'a,D> Pipeline<'a,D> for Bitand<'a,D> where D: 'a + Document {
+}
 
-impl<D,T,I> OpBitor<D,T,I>
-    where
-    D: Document, T: Document + From<D>,
-    I: Iterator<Item=Entry<D>> + Clone
-{
-    pub fn new(lhs: I, rhs: I, _: T) -> OpBitor<D,T,I> {
-        OpBitor{lhs, rhs, _data: PhantomData}
+
+pub struct Bitor<'a,D> where D: Document {
+    lhs: Input<'a,D>,
+    rhs: Input<'a,D>,
+}
+
+impl<'a,D> Bitor<'a,D> where D: Document {
+    pub fn new(lhs: Input<'a,D>, rhs: Input<'a,D>) -> Bitor<'a,D> {
+        Bitor{lhs, rhs}
     }
 }
 
-impl<D,T,I> Clone for OpBitor<D,T,I>
-    where
-    D: Document, T: Document + From<D>,
-    I: Iterator<Item=Entry<D>> + Clone
-{
-    fn clone(&self) -> OpBitor<D,T,I> {
-        OpBitor{
-            lhs: self.lhs.clone(), rhs: self.rhs.clone(), _data: PhantomData,
-        }
+impl<'a,D> Repeater<'a,D> for Bitor<'a,D> where D: 'a + Document {
+    fn repeat(&self) -> Input<'a,D> {
+        let x = Bitor{ lhs: self.lhs.repeat(), rhs: self.rhs.repeat() };
+        Box::new(x)
     }
 }
 
-impl<D,T,I> Iterator for OpBitor<D,T,I>
-    where
-    D: Document, T: Document + From<D>,
-    I: Iterator<Item=Entry<D>> + Clone
-{
-    type Item=Entry<T>;
+impl<'a,D> Iterator for Bitor<'a,D> where D: Document {
+    type Item=Entry<D>;
 
-    fn next(&mut self) -> Option<Entry<T>> {
+    fn next(&mut self) -> Option<Entry<D>> {
         let d_lhs = self.lhs.next()?;
         let d_rhs = self.rhs.next()?;
+        let doc = d_lhs.doc.clone() | d_rhs.doc.clone();
         let entries = vec![d_lhs, d_rhs];
-        let doc = d_lhs.doc | d_rhs.doc;
-        Some(Entry::new_merged(entries, doc).into())
+        Some(Entry::new_merged(entries, doc))
     }
 }
 
+impl<'a,D> Pipeline<'a,D> for Bitor<'a,D> where D: 'a + Document {
+}
 
-impl<D,T,I> OpBitxor<D,T,I>
-    where
-    D: Document, T: Document + From<D>,
-    I: Iterator<Item=Entry<D>> + Clone
-{
-    pub fn new(lhs: I, rhs: I, _: T) -> OpBitxor<D,T,I> {
-        OpBitxor{lhs, rhs, _data: PhantomData}
+
+pub struct Bitxor<'a,D> where D: Document {
+    lhs: Input<'a,D>,
+    rhs: Input<'a,D>,
+}
+
+impl<'a,D> Bitxor<'a,D> where D: Document {
+    pub fn new(lhs: Input<'a,D>, rhs: Input<'a,D>) -> Bitxor<'a,D> {
+        Bitxor{lhs, rhs}
     }
 }
 
-impl<D,T,I> Clone for OpBitxor<D,T,I>
-    where
-    D: Document, T: Document + From<D>,
-    I: Iterator<Item=Entry<D>> + Clone
-{
-    fn clone(&self) -> OpBitxor<D,T,I> {
-        OpBitxor{
-            lhs: self.lhs.clone(), rhs: self.rhs.clone(), _data: PhantomData,
-        }
+impl<'a,D> Repeater<'a,D> for Bitxor<'a,D> where D: 'a + Document {
+    fn repeat(&self) -> Input<'a,D> {
+        let x = Bitxor{ lhs: self.lhs.repeat(), rhs: self.rhs.repeat() };
+        Box::new(x)
     }
 }
 
-impl<D,T,I> Iterator for OpBitxor<D,T,I>
-    where
-    D: Document, T: Document + From<D>,
-    I: Iterator<Item=Entry<D>> + Clone
-{
-    type Item=Entry<T>;
+impl<'a,D> Iterator for Bitxor<'a,D> where D: Document {
+    type Item=Entry<D>;
 
-    fn next(&mut self) -> Option<Entry<T>> {
+    fn next(&mut self) -> Option<Entry<D>> {
         let d_lhs = self.lhs.next()?;
         let d_rhs = self.rhs.next()?;
+        let doc = d_lhs.doc.clone() ^ d_rhs.doc.clone();
         let entries = vec![d_lhs, d_rhs];
-        let doc = d_lhs.doc ^ d_rhs.doc;
-        Some(Entry::new_merged(entries, doc).into())
+        Some(Entry::new_merged(entries, doc))
     }
 }
 
+impl<'a,D> Pipeline<'a,D> for Bitxor<'a,D> where D: 'a + 'a + Document {
+}
 
-impl<D,T,I> OpEq<D,T,I>
-    where
-    D: Document, T: Document + From<D>,
-    I: Iterator<Item=Entry<D>> + Clone
-{
-    pub fn new(lhs: I, rhs: I, _: T) -> OpEq<D,T,I> {
-        OpEq{lhs, rhs, _data: PhantomData}
+
+pub struct Eq<'a,D> where D: Document {
+    lhs: Input<'a,D>,
+    rhs: Input<'a,D>,
+}
+
+impl<'a,D> Eq<'a,D> where D: Document {
+    pub fn new(lhs: Input<'a,D>, rhs: Input<'a,D>) -> Eq<'a,D> {
+        Eq{lhs, rhs}
     }
 }
 
-impl<D,T,I> Clone for OpEq<D,T,I>
-    where
-    D: Document, T: Document + From<D>,
-    I: Iterator<Item=Entry<D>> + Clone
-{
-    fn clone(&self) -> OpEq<D,T,I> {
-        OpEq{
-            lhs: self.lhs.clone(), rhs: self.rhs.clone(), _data: PhantomData,
-        }
+impl<'a,D> Repeater<'a,D> for Eq<'a,D> where D: 'a + Document {
+    fn repeat(&self) -> Input<'a,D> {
+        let x = Eq{ lhs: self.lhs.repeat(), rhs: self.rhs.repeat() };
+        Box::new(x)
     }
 }
 
-impl<D,T,I> Iterator for OpEq<D,T,I>
-    where
-    D: Document, T: Document + From<D>,
-    I: Iterator<Item=Entry<D>> + Clone
-{
-    type Item=Entry<T>;
+impl<'a,D> Iterator for Eq<'a,D> where D: Document {
+    type Item=Entry<D>;
 
-    fn next(&mut self) -> Option<Entry<T>> {
+    fn next(&mut self) -> Option<Entry<D>> {
         let d_lhs = self.lhs.next()?;
         let d_rhs = self.rhs.next()?;
+        let doc = From::from(d_lhs.doc.clone() == d_rhs.doc.clone());
         let entries = vec![d_lhs, d_rhs];
-        let doc = From::from(d_lhs.doc == d_rhs.doc);
-        Some(Entry::new_merged(entries, doc).into())
+        Some(Entry::new_merged(entries, doc))
     }
 }
 
+impl<'a,D> Pipeline<'a,D> for Eq<'a,D> where D: 'a + Document {
+}
 
-impl<D,T,I> OpNe<D,T,I>
-    where
-    D: Document, T: Document + From<D>,
-    I: Iterator<Item=Entry<D>> + Clone
-{
-    pub fn new(lhs: I, rhs: I, _: T) -> OpNe<D,T,I> {
-        OpNe{lhs, rhs, _data: PhantomData}
+
+pub struct Ne<'a,D> where D: Document {
+    lhs: Input<'a,D>,
+    rhs: Input<'a,D>,
+}
+
+impl<'a,D> Ne<'a,D> where D: Document {
+    pub fn new(lhs: Input<'a,D>, rhs: Input<'a,D>) -> Ne<'a,D> {
+        Ne{lhs, rhs}
     }
 }
 
-impl<D,T,I> Clone for OpNe<D,T,I>
-    where
-    D: Document, T: Document + From<D>,
-    I: Iterator<Item=Entry<D>> + Clone
-{
-    fn clone(&self) -> OpNe<D,T,I> {
-        OpNe{
-            lhs: self.lhs.clone(), rhs: self.rhs.clone(), _data: PhantomData,
-        }
+impl<'a,D> Repeater<'a,D> for Ne<'a,D> where D: 'a + Document {
+    fn repeat(&self) -> Input<'a,D> {
+        let x = Ne{ lhs: self.lhs.repeat(), rhs: self.rhs.repeat() };
+        Box::new(x)
     }
 }
 
-impl<D,T,I> Iterator for OpNe<D,T,I>
-    where
-    D: Document, T: Document + From<D>,
-    I: Iterator<Item=Entry<D>> + Clone
-{
-    type Item=Entry<T>;
+impl<'a,D> Iterator for Ne<'a,D> where D: Document {
+    type Item=Entry<D>;
 
-    fn next(&mut self) -> Option<Entry<T>> {
+    fn next(&mut self) -> Option<Entry<D>> {
         let d_lhs = self.lhs.next()?;
         let d_rhs = self.rhs.next()?;
+        let doc = From::from(d_lhs.doc.clone() != d_rhs.doc.clone());
         let entries = vec![d_lhs, d_rhs];
-        let doc = From::from(d_lhs.doc != d_rhs.doc);
-        Some(Entry::new_merged(entries, doc).into())
+        Some(Entry::new_merged(entries, doc))
     }
 }
 
+impl<'a,D> Pipeline<'a,D> for Ne<'a,D> where D: 'a + Document {
+}
 
-impl<D,T,I> OpLt<D,T,I>
-    where
-    D: Document, T: Document + From<D>,
-    I: Iterator<Item=Entry<D>> + Clone
-{
-    pub fn new(lhs: I, rhs: I, _: T) -> OpLt<D,T,I> {
-        OpLt{lhs, rhs, _data: PhantomData}
+
+pub struct Lt<'a,D> where D: Document {
+    lhs: Input<'a,D>,
+    rhs: Input<'a,D>,
+}
+
+impl<'a,D> Lt<'a,D> where D: Document {
+    pub fn new(lhs: Input<'a,D>, rhs: Input<'a,D>) -> Lt<'a,D> {
+        Lt{lhs, rhs}
     }
 }
 
-impl<D,T,I> Clone for OpLt<D,T,I>
-    where
-    D: Document, T: Document + From<D>,
-    I: Iterator<Item=Entry<D>> + Clone
-{
-    fn clone(&self) -> OpLt<D,T,I> {
-        OpLt{
-            lhs: self.lhs.clone(), rhs: self.rhs.clone(), _data: PhantomData,
-        }
+impl<'a,D> Repeater<'a,D> for Lt<'a,D> where D: 'a + Document {
+    fn repeat(&self) -> Input<'a,D> {
+        let x = Lt{ lhs: self.lhs.repeat(), rhs: self.rhs.repeat() };
+        Box::new(x)
     }
 }
 
-impl<D,T,I> Iterator for OpLt<D,T,I>
-    where
-    D: Document, T: Document + From<D>,
-    I: Iterator<Item=Entry<D>> + Clone
-{
-    type Item=Entry<T>;
+impl<'a,D> Iterator for Lt<'a,D> where D: Document {
+    type Item=Entry<D>;
 
-    fn next(&mut self) -> Option<Entry<T>> {
+    fn next(&mut self) -> Option<Entry<D>> {
         let d_lhs = self.lhs.next()?;
         let d_rhs = self.rhs.next()?;
+        let doc = From::from(d_lhs.doc.clone() < d_rhs.doc.clone());
         let entries = vec![d_lhs, d_rhs];
-        let doc = From::from(d_lhs.doc < d_rhs.doc);
-        Some(Entry::new_merged(entries, doc).into())
+        Some(Entry::new_merged(entries, doc))
     }
 }
 
+impl<'a,D> Pipeline<'a,D> for Lt<'a,D> where D: 'a + Document {
+}
 
-impl<D,T,I> OpLe<D,T,I>
-    where
-    D: Document, T: Document + From<D>,
-    I: Iterator<Item=Entry<D>> + Clone
-{
-    pub fn new(lhs: I, rhs: I, _: T) -> OpLe<D,T,I> {
-        OpLe{lhs, rhs, _data: PhantomData}
+
+pub struct Le<'a,D> where D: Document {
+    lhs: Input<'a,D>,
+    rhs: Input<'a,D>,
+}
+
+impl<'a,D> Le<'a,D> where D: Document {
+    pub fn new(lhs: Input<'a,D>, rhs: Input<'a,D>) -> Le<'a,D> {
+        Le{lhs, rhs}
     }
 }
 
-impl<D,T,I> Clone for OpLe<D,T,I>
-    where
-    D: Document, T: Document + From<D>,
-    I: Iterator<Item=Entry<D>> + Clone
-{
-    fn clone(&self) -> OpLe<D,T,I> {
-        OpLe{
-            lhs: self.lhs.clone(), rhs: self.rhs.clone(), _data: PhantomData,
-        }
+impl<'a,D> Repeater<'a,D> for Le<'a,D> where D: 'a + Document {
+    fn repeat(&self) -> Input<'a,D> {
+        let x = Le{ lhs: self.lhs.repeat(), rhs: self.rhs.repeat() };
+        Box::new(x)
     }
 }
 
-impl<D,T,I> Iterator for OpLe<D,T,I>
-    where
-    D: Document, T: Document + From<D>,
-    I: Iterator<Item=Entry<D>> + Clone
-{
-    type Item=Entry<T>;
+impl<'a,D> Iterator for Le<'a,D> where D: Document {
+    type Item=Entry<D>;
 
-    fn next(&mut self) -> Option<Entry<T>> {
+    fn next(&mut self) -> Option<Entry<D>> {
         let d_lhs = self.lhs.next()?;
         let d_rhs = self.rhs.next()?;
+        let doc = From::from(d_lhs.doc.clone() >= d_rhs.doc.clone());
         let entries = vec![d_lhs, d_rhs];
-        let doc = From::from(d_lhs.doc >= d_rhs.doc);
-        Some(Entry::new_merged(entries, doc).into())
+        Some(Entry::new_merged(entries, doc))
     }
 }
 
+impl<'a,D> Pipeline<'a,D> for Le<'a,D> where D: 'a + Document {
+}
 
-impl<D,T,I> OpGt<D,T,I>
-    where
-    D: Document, T: Document + From<D>,
-    I: Iterator<Item=Entry<D>> + Clone
-{
-    pub fn new(lhs: I, rhs: I, _: T) -> OpGt<D,T,I> {
-        OpGt{lhs, rhs, _data: PhantomData}
+
+pub struct Gt<'a,D> where D: Document {
+    lhs: Input<'a,D>,
+    rhs: Input<'a,D>,
+}
+
+impl<'a,D> Gt<'a,D> where D: Document {
+    pub fn new(lhs: Input<'a,D>, rhs: Input<'a,D>) -> Gt<'a,D> {
+        Gt{lhs, rhs}
     }
 }
 
-impl<D,T,I> Clone for OpGt<D,T,I>
-    where
-    D: Document, T: Document + From<D>,
-    I: Iterator<Item=Entry<D>> + Clone
-{
-    fn clone(&self) -> OpGt<D,T,I> {
-        OpGt{
-            lhs: self.lhs.clone(), rhs: self.rhs.clone(), _data: PhantomData,
-        }
+impl<'a,D> Repeater<'a,D> for Gt<'a,D> where D: 'a + Document {
+    fn repeat(&self) -> Input<'a,D> {
+        let x = Gt{ lhs: self.lhs.repeat(), rhs: self.rhs.repeat() };
+        Box::new(x)
     }
 }
 
-impl<D,T,I> Iterator for OpGt<D,T,I>
-    where
-    D: Document, T: Document + From<D>,
-    I: Iterator<Item=Entry<D>> + Clone
-{
-    type Item=Entry<T>;
+impl<'a,D> Iterator for Gt<'a,D> where D: Document {
+    type Item=Entry<D>;
 
-    fn next(&mut self) -> Option<Entry<T>> {
+    fn next(&mut self) -> Option<Entry<D>> {
         let d_lhs = self.lhs.next()?;
         let d_rhs = self.rhs.next()?;
+        let doc = From::from(d_lhs.doc.clone() > d_rhs.doc.clone());
         let entries = vec![d_lhs, d_rhs];
-        let doc = From::from(d_lhs.doc > d_rhs.doc);
-        Some(Entry::new_merged(entries, doc).into())
+        Some(Entry::new_merged(entries, doc))
     }
 }
 
+impl<'a,D> Pipeline<'a,D> for Gt<'a,D> where D: 'a + Document {
+}
 
-impl<D,T,I> OpGe<D,T,I>
-    where
-    D: Document, T: Document + From<D>,
-    I: Iterator<Item=Entry<D>> + Clone
-{
-    pub fn new(lhs: I, rhs: I, _: T) -> OpGe<D,T,I> {
-        OpGe{lhs, rhs, _data: PhantomData}
+
+pub struct Ge<'a,D> where D: Document {
+    lhs: Input<'a,D>,
+    rhs: Input<'a,D>,
+}
+
+impl<'a,D> Ge<'a,D> where D: Document {
+    pub fn new(lhs: Input<'a,D>, rhs: Input<'a,D>) -> Ge<'a,D> {
+        Ge{lhs, rhs}
     }
 }
 
-impl<D,T,I> Clone for OpGe<D,T,I>
-    where
-    D: Document, T: Document + From<D>,
-    I: Iterator<Item=Entry<D>> + Clone
-{
-    fn clone(&self) -> OpGe<D,T,I> {
-        OpGe{
-            lhs: self.lhs.clone(), rhs: self.rhs.clone(), _data: PhantomData,
-        }
+impl<'a,D> Repeater<'a,D> for Ge<'a,D> where D: 'a + Document {
+    fn repeat(&self) -> Input<'a,D> {
+        let x = Ge{ lhs: self.lhs.repeat(), rhs: self.rhs.repeat() };
+        Box::new(x)
     }
 }
 
-impl<D,T,I> Iterator for OpGe<D,T,I>
-    where
-    D: Document, T: Document + From<D>,
-    I: Iterator<Item=Entry<D>> + Clone
-{
-    type Item=Entry<T>;
+impl<'a,D> Iterator for Ge<'a,D> where D: Document {
+    type Item=Entry<D>;
 
-    fn next(&mut self) -> Option<Entry<T>> {
+    fn next(&mut self) -> Option<Entry<D>> {
         let d_lhs = self.lhs.next()?;
         let d_rhs = self.rhs.next()?;
+        let doc = From::from(d_lhs.doc.clone() >= d_rhs.doc.clone());
         let entries = vec![d_lhs, d_rhs];
-        let doc = From::from(d_lhs.doc >= d_rhs.doc);
-        Some(Entry::new_merged(entries, doc).into())
+        Some(Entry::new_merged(entries, doc))
     }
 }
 
+impl<'a,D> Pipeline<'a,D> for Ge<'a,D> where D: 'a + Document {
+}
 
-impl<D,T,I> Clone for OpAnd<D,T,I>
-    where
-    D: Document, T: Document + From<D>,
-    I: Iterator<Item=Entry<D>> + Clone
-{
-    fn clone(&self) -> OpAnd<D,T,I> {
-        OpAnd{
-            lhs: self.lhs.clone(), rhs: self.rhs.clone(), _data: PhantomData,
-        }
+
+pub struct And<'a,D> where D: Document {
+    lhs: Input<'a,D>,
+    rhs: Input<'a,D>,
+}
+
+impl<'a,D> And<'a,D> where D: Document {
+    pub fn new(lhs: Input<'a,D>, rhs: Input<'a,D>) -> And<'a,D> {
+        And{lhs, rhs}
     }
 }
 
-impl<D,T,I> Iterator for OpAnd<D,T,I>
-    where
-    D: Document, T: Document + From<D>,
-    I: Iterator<Item=Entry<D>> + Clone
-{
-    type Item=Entry<T>;
+impl<'a,D> Repeater<'a,D> for And<'a,D> where D: 'a + Document {
+    fn repeat(&self) -> Input<'a,D> {
+        let x = And{ lhs: self.lhs.repeat(), rhs: self.rhs.repeat() };
+        Box::new(x)
+    }
+}
 
-    fn next(&mut self) -> Option<Entry<T>> {
+impl<'a,D> Iterator for And<'a,D> where D: Document {
+    type Item=Entry<D>;
+
+    fn next(&mut self) -> Option<Entry<D>> {
         let d_lhs = self.lhs.next()?;
         let d_rhs = self.rhs.next()?;
+        let doc: D = From::from(d_lhs.doc.clone().and(d_rhs.doc.clone()));
         let entries = vec![d_lhs, d_rhs];
-        let doc: D = From::from(d_lhs.doc.and(d_rhs.doc));
-        Some(Entry::new_merged(entries, doc).into())
+        Some(Entry::new_merged(entries, doc))
     }
 }
 
+impl<'a,D> Pipeline<'a,D> for And<'a,D> where D: 'a + Document {
+}
 
-impl<D,T,I> OpOr<D,T,I>
-    where
-    D: Document, T: Document + From<D>,
-    I: Iterator<Item=Entry<D>> + Clone
-{
-    pub fn new(lhs: I, rhs: I, _: T) -> OpOr<D,T,I> {
-        OpOr{lhs, rhs, _data: PhantomData}
+
+pub struct Or<'a,D> where D: Document {
+    lhs: Input<'a,D>,
+    rhs: Input<'a,D>,
+}
+
+impl<'a,D> Or<'a,D> where D: Document {
+    pub fn new(lhs: Input<'a,D>, rhs: Input<'a,D>) -> Or<'a,D> {
+        Or{lhs, rhs}
     }
 }
 
-impl<D,T,I> Clone for OpOr<D,T,I>
-    where
-    D: Document, T: Document + From<D>,
-    I: Iterator<Item=Entry<D>> + Clone
-{
-    fn clone(&self) -> OpOr<D,T,I> {
-        OpOr{
-            lhs: self.lhs.clone(), rhs: self.rhs.clone(), _data: PhantomData,
-        }
+impl<'a,D> Repeater<'a,D> for Or<'a,D> where D: 'a + Document {
+    fn repeat(&self) -> Input<'a,D> {
+        let x = Or{ lhs: self.lhs.repeat(), rhs: self.rhs.repeat() };
+        Box::new(x)
     }
 }
 
-impl<D,T,I> Iterator for OpOr<D,T,I>
-    where
-    D: Document, T: Document + From<D>,
-    I: Iterator<Item=Entry<D>> + Clone
-{
-    type Item=Entry<T>;
+impl<'a,D> Iterator for Or<'a,D> where D: Document {
+    type Item=Entry<D>;
 
-    fn next(&mut self) -> Option<Entry<T>> {
+    fn next(&mut self) -> Option<Entry<D>> {
         let d_lhs = self.lhs.next()?;
         let d_rhs = self.rhs.next()?;
+        let doc: D = From::from(d_lhs.doc.clone().or(d_rhs.doc.clone()));
         let entries = vec![d_lhs, d_rhs];
-        let doc: D = From::from(d_lhs.doc.or(d_rhs.doc));
-        Some(Entry::new_merged(entries, doc).into())
+        Some(Entry::new_merged(entries, doc))
     }
 }
 
+impl<'a,D> Pipeline<'a,D> for Or<'a,D> where D: 'a + Document {
+}
 
-impl<D,T,I> BuiltinLength<D,T,I>
-    where
-    D: Document, T: Document + From<D>,
-    I: Iterator<Item=Entry<D>> + Clone
-{
-    pub fn new(args: Vec<I>, _: T) -> BuiltinLength<D,T,I> {
+
+pub struct BuiltinLength<'a,D> where D: Document {
+    arg_input: Option<Input<'a,D>>,
+}
+
+impl<'a,D> BuiltinLength<'a,D> where D: Document {
+    pub fn new(mut args: Vec<Input<D>>) -> BuiltinLength<D> {
         if args.len() == 1 {
-            BuiltinLength{arg: Some(args[0]), _data: PhantomData}
+            BuiltinLength{arg_input: Some(args.remove(0))}
         } else {
-            BuiltinLength{arg: None, _data: PhantomData}
+            BuiltinLength{arg_input: None}
         }
     }
 }
 
-impl<D,T,I> Clone for BuiltinLength<D,T,I>
-    where
-    D: Document, T: Document + From<D>,
-    I: Iterator<Item=Entry<D>> + Clone
-{
-    fn clone(&self) -> BuiltinLength<D,T,I> {
-        BuiltinLength{ arg: self.arg.clone(), _data: PhantomData }
+impl<'a,D> Repeater<'a,D> for BuiltinLength<'a,D> where D: 'a + Document {
+    fn repeat(&self) -> Input<'a,D> {
+        let arg_input = match self.arg_input.as_ref() {
+            Some(input) => Some(input.repeat()),
+            None => None
+        };
+        Box::new(BuiltinLength{arg_input})
     }
 }
 
-impl<D,T,I> Iterator for BuiltinLength<D,T,I>
-    where
-    D: Document, T: Document + From<D>,
-    I: Iterator<Item=Entry<D>> + Clone
-{
-    type Item=Entry<T>;
+impl<'a,D> Iterator for BuiltinLength<'a,D> where D: Document {
+    type Item=Entry<D>;
 
-    fn next(&mut self) -> Option<Entry<T>> {
-        if self.arg.is_none() {
-            let entry = Entry::new(T::null());
+    fn next(&mut self) -> Option<Entry<D>> {
+        if self.arg_input.is_none() {
+            let mut entry = Entry::new(D::null());
             entry.set_error(format!("invalid number of args for length"));
             return Some(entry)
         }
-        let mut d_entry = self.arg.unwrap().next()?;
+        let mut d_entry = self.arg_input.as_mut().unwrap().next()?;
         match d_entry.doc.len() {
             Some(n) => {
                 d_entry.doc = From::from(n as i128);
@@ -1590,107 +1459,106 @@ impl<D,T,I> Iterator for BuiltinLength<D,T,I>
                 d_entry.set_error(format!("cannot find length for {:?}", dt));
             },
         };
-        Some(d_entry.into())
+        Some(d_entry)
     }
 }
 
+impl<'a,D> Pipeline<'a,D> for BuiltinLength<'a,D> where D: 'a + Document {
+}
 
-impl<D,T,I> BuiltinChars<D,T,I>
-    where
-    D: Document, T: Document + From<D>,
-    I: Iterator<Item=Entry<D>> + Clone
-{
-    pub fn new(args: Vec<I>, _: T) -> BuiltinChars<D,T,I> {
+
+pub struct BuiltinChars<'a,D> where D: Document {
+    arg_input: Option<Input<'a,D>>,
+}
+
+impl<'a,D> BuiltinChars<'a,D> where D: Document {
+    pub fn new(mut args: Vec<Input<D>>) -> BuiltinChars<D> {
         if args.len() == 1 {
-            BuiltinChars{arg: Some(args[0]), _data: PhantomData}
+            BuiltinChars{arg_input: Some(args.remove(0))}
         } else {
-            BuiltinChars{arg: None, _data: PhantomData}
+            BuiltinChars{arg_input: None}
         }
     }
 }
 
-impl<D,T,I> Clone for BuiltinChars<D,T,I>
-    where
-    D: Document, T: Document + From<D>,
-    I: Iterator<Item=Entry<D>> + Clone
-{
-    fn clone(&self) -> BuiltinChars<D,T,I> {
-        BuiltinChars{ arg: self.arg.clone(), _data: PhantomData }
+impl<'a,D> Repeater<'a,D> for BuiltinChars<'a,D> where D: 'a + Document {
+    fn repeat(&self) -> Input<'a,D> {
+        let arg_input = match self.arg_input.as_ref() {
+            Some(input) => Some(input.repeat()),
+            None => None
+        };
+        Box::new(BuiltinChars{arg_input})
     }
 }
 
-impl<D,T,I> Iterator for BuiltinChars<D,T,I>
-    where
-    D: Document, T: Document + From<D>,
-    I: Iterator<Item=Entry<D>> + Clone
-{
-    type Item=Entry<T>;
+impl<'a,D> Iterator for BuiltinChars<'a,D> where D: Document {
+    type Item=Entry<D>;
 
-    fn next(&mut self) -> Option<Entry<T>> {
-        if self.arg.is_none() {
-            let entry = Entry::new(T::null());
+    fn next(&mut self) -> Option<Entry<D>> {
+        if self.arg_input.is_none() {
+            let mut entry = Entry::new(D::null());
             entry.set_error(format!("invalid number of args for chars"));
             return Some(entry)
         }
-        let mut d_entry = self.arg.unwrap().next()?;
+        let mut d_entry = self.arg_input.as_mut().unwrap().next()?;
+        let dt = d_entry.doc.doctype();
         match d_entry.doc.into_iter() {
             Some(iter) => {
                 d_entry.doc = From::from(iter.collect::<Vec<D>>());
             },
             None => {
-                let dt = d_entry.doc.doctype();
                 d_entry.doc = D::null();
                 d_entry.set_error(format!("cannot find chars for {:?}", dt));
             },
         }
-        Some(d_entry.into())
+        Some(d_entry)
     }
 }
 
+impl<'a,D> Pipeline<'a,D> for BuiltinChars<'a,D> where D: 'a + Document {
+}
 
-impl<D,T,I> BuiltinKeys<D,T,I>
-    where
-    D: Document, T: Document + From<D>,
-    I: Iterator<Item=Entry<D>> + Clone
-{
-    pub fn new(args: Vec<I>, _: T) -> BuiltinKeys<D,T,I> {
+
+pub struct BuiltinKeys<'a,D> where D: Document {
+    arg_input: Option<Input<'a,D>>,
+}
+
+impl<'a,D> BuiltinKeys<'a,D> where D: Document {
+    pub fn new(mut args: Vec<Input<D>>) -> BuiltinKeys<D> {
         if args.len() == 1 {
-            BuiltinKeys{arg: Some(args[0]), _data: PhantomData}
+            BuiltinKeys{arg_input: Some(args.remove(0))}
         } else {
-            BuiltinKeys{arg: None, _data: PhantomData}
+            BuiltinKeys{arg_input: None}
         }
     }
 }
 
-impl<D,T,I> Clone for BuiltinKeys<D,T,I>
-    where
-    D: Document, T: Document + From<D>,
-    I: Iterator<Item=Entry<D>> + Clone
-{
-    fn clone(&self) -> BuiltinKeys<D,T,I> {
-        BuiltinKeys{ arg: self.arg.clone(), _data: PhantomData }
+impl<'a,D> Repeater<'a,D> for BuiltinKeys<'a,D> where D: 'a + Document {
+    fn repeat(&self) -> Input<'a,D> {
+        let arg_input = match self.arg_input.as_ref() {
+            Some(input) => Some(input.repeat()),
+            None => None
+        };
+        Box::new(BuiltinKeys{arg_input})
     }
 }
 
-impl<D,T,I> Iterator for BuiltinKeys<D,T,I>
-    where
-    D: Document, T: Document + From<D>,
-    I: Iterator<Item=Entry<D>> + Clone
-{
-    type Item=Entry<T>;
+impl<'a,D> Iterator for BuiltinKeys<'a,D> where D: Document {
+    type Item=Entry<D>;
 
-    fn next(&mut self) -> Option<Entry<T>> {
-        if self.arg.is_none() {
-            let entry = Entry::new(T::null());
+    fn next(&mut self) -> Option<Entry<D>> {
+        if self.arg_input.is_none() {
+            let mut entry = Entry::new(D::null());
             entry.set_error(format!("invalid number of args for keys"));
             return Some(entry)
         }
-        let mut d_entry = self.arg.unwrap().next()?;
-        match d_entry.doc.doctype() {
+        let mut d_entry = self.arg_input.as_mut().unwrap().next()?;
+        let dt = d_entry.doc.doctype();
+        match dt {
             Doctype::Array => {
                 let ln = d_entry.doc.len().unwrap();
-                let keys = (0..ln).map(|i| From::from(i as i128)).collect();
-                d_entry.doc = From::from(keys);
+                let keys = (0..ln).map(|i| From::from(i as i128));
+                d_entry.doc = From::from(keys.collect::<Vec<D>>());
             },
             Doctype::Object => {
                 let keys = d_entry.doc.object().unwrap().into_iter()
@@ -1699,18 +1567,21 @@ impl<D,T,I> Iterator for BuiltinKeys<D,T,I>
                 d_entry.doc = From::from(keys);
             },
             _ => {
-                let dt = d_entry.doc.doctype();
                 d_entry.doc = D::null();
                 d_entry.set_error(format!("cannot find chars for {:?}", dt));
             },
         }
-        Some(d_entry.into())
+        Some(d_entry)
     }
 }
 
+impl<'a,D> Pipeline<'a,D> for BuiltinKeys<'a,D> where D: 'a + Document {
+}
+
+
 
 //fn builtin_has<D>(args: &mut Vec<Thunk>, doc: D)
-//    -> Result<Output<D>> where D: Document
+//    -> Result<Input<D>> where D: Document
 //{
 //    assert_args_len(&args, 1)?;
 //    let item = args.index_mut(0)(doc.clone())?.remove(0);
@@ -1734,7 +1605,7 @@ impl<D,T,I> Iterator for BuiltinKeys<D,T,I>
 //}
 //
 //fn builtin_indoc<D>(args: &mut Vec<Thunk>, item: D)
-//    -> Result<Output<D>> where D: Document
+//    -> Result<Input<D>> where D: Document
 //{
 //    assert_args_len(&args, 1)?;
 //    let doc = args.index_mut(0)(item.clone())?.remove(0);
@@ -1758,7 +1629,7 @@ impl<D,T,I> Iterator for BuiltinKeys<D,T,I>
 //}
 //
 //fn builtin_map<D>(args: &mut Vec<Thunk>, doc: D)
-//    -> Result<Output<D>> where D: Document
+//    -> Result<Input<D>> where D: Document
 //{
 //    assert_args_len(&args, 1)?;
 //    let thunk = args.index_mut(0);
@@ -1784,7 +1655,7 @@ impl<D,T,I> Iterator for BuiltinKeys<D,T,I>
 //}
 //
 //fn builtin_any<D>(args: &mut Vec<Thunk>, doc: D)
-//    -> Result<Output<D>> where D: Document
+//    -> Result<Input<D>> where D: Document
 //{
 //    assert_args_len(&args, 1)?;
 //    let thunk = args.index_mut(0);
@@ -1813,7 +1684,7 @@ impl<D,T,I> Iterator for BuiltinKeys<D,T,I>
 //}
 //
 //fn builtin_all<D>(args: &mut Vec<Thunk>, doc: D)
-//    -> Result<Output<D>> where D: Document
+//    -> Result<Input<D>> where D: Document
 //{
 //    assert_args_len(&args, 1)?;
 //    let thunk = args.index_mut(0);
@@ -1850,7 +1721,7 @@ impl<D,T,I> Iterator for BuiltinKeys<D,T,I>
 //}
 //
 //#[allow(dead_code)] // TODO: Can be removed.
-//fn assert_iterator<D>(outs: &Output<D>) -> Result<()> where D: Document {
+//fn assert_iterator<D>(outs: &Input<D>) -> Result<()> where D: Document {
 //    if outs.len() < 2 {
 //        let err = format!("output is not an iterator {}", outs.len());
 //        return Err(Error::InvalidArg(err))
@@ -1859,7 +1730,7 @@ impl<D,T,I> Iterator for BuiltinKeys<D,T,I>
 //}
 //
 //#[allow(dead_code)]
-//fn assert_singular<D>(outs: &Output<D>) -> Result<()> where D: Document {
+//fn assert_singular<D>(outs: &Input<D>) -> Result<()> where D: Document {
 //    if outs.len() == 1 {
 //        let err = format!("output is an iterator {}", outs.len());
 //        return Err(Error::InvalidArg(err))

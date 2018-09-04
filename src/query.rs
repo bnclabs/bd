@@ -4,19 +4,8 @@ use std::str::FromStr;
 use nom::{self, {types::CompleteStr as NS}};
 
 use query_nom::parse_program_nom;
-use entry::Entry;
-use db::Document;
-use ops::Op;
-
-use ops::{OpIdentity, OpRecurse};
-use ops::{OpNull, OpBool, OpInteger, OpFloat, OpString};
-use ops::{OpIndex, OpIdentifier, OpSlice, OpItervalues, OpIter,};
-use ops::{OpList, OpDict};
-use ops::{OpNeg, OpNot, OpMult, OpDiv, OpRem, OpAdd, OpSub,};
-use ops::{OpShr, OpShl, OpBitand, OpBitor, OpBitxor,};
-use ops::{OpEq, OpNe, OpLt, OpLe, OpGt, OpGe,};
-use ops::{OpAnd, OpOr,};
-use ops::{BuiltinLength, BuiltinChars, BuiltinKeys,};
+use db::{Document, Input};
+use ops;
 
 // TODO: Parametrise Thunk over different types of Document.
 // TODO: Better to replace panic with assert!() macro.
@@ -44,11 +33,11 @@ pub enum Thunk where {
     IterateValues(bool),
     Iterate(Vec<Thunk>, bool),
     List(Vec<Thunk>, bool),
-    Dict(Vec<(Thunk, Option<Thunk>)>, bool),
+    Dict(Vec<(Thunk, Thunk)>, bool),
     // Operations in decreasing precedance
     Neg(Box<Thunk>),
     Not(Box<Thunk>),
-    Mult(Box<Thunk>, Box<Thunk>),
+    Mul(Box<Thunk>, Box<Thunk>),
     Div(Box<Thunk>, Box<Thunk>),
     Rem(Box<Thunk>, Box<Thunk>),
     Add(Box<Thunk>, Box<Thunk>),
@@ -72,134 +61,164 @@ pub enum Thunk where {
 }
 
 impl Thunk {
-    pub fn prepare<D,T>(self, input: Op) -> Op
+    pub fn prepare<'a, D>(self, input: Input<'a, D>) -> Input<D>
         where
-        D: Document, T: Document + From<D>,
-        I: Iterator<Item=Entry<D>> + Clone,
-        O: Iterator<Item=Entry<T>> + Clone,
+        D: 'a + Document,
     {
         use query::Thunk::*;
 
-        let t = T::default();
         match self {
-            Empty | Identity => OpIdentity::new(input, t),
-            Recurse => OpRecurse::new(input, t),
+            Empty | Identity => Box::new(ops::Identity::new(input)),
+            Recurse => Box::new(ops::Recurse::new(input)),
 
-            Null(_opt) => OpNull::new(input, t),
-            Bool(value, _opt) => OpBool::new(input, value, t),
-            Integer(value, _opt) => OpInteger::new(input, value, t),
-            Float(value, _opt) => OpFloat::new(input, value, t),
-            String(value, _opt) => OpString::new(input, value, t),
+            Null(_opt) => Box::new(ops::Null::new(input)),
+            Bool(value, _opt) => Box::new(ops::Bool::new(input, value)),
+            Integer(value, _opt) => Box::new(ops::Integer::new(input, value)),
+            Float(value, _opt) => Box::new(ops::Float::new(input, value)),
+            String(value, _opt) => Box::new(ops::StringLit::new(input, value)),
 
-            IndexShortcut(s, n, _opt) => OpIndex::new(input, s, n, t),
-            Identifier(s, _opt) => OpIdentifier::new(input, s, t),
-            Slice(a, b, _opt) => OpSlice::new(input, a, b, t),
-            IterateValues(_opt) => OpItervalues::new(input, t),
+            IndexShortcut(s, n, _opt) => {
+                Box::new(ops::Index::new(input, s, n))
+            },
+            Identifier(s, _opt) => Box::new(ops::Identifier::new(input, s)),
+            Slice(a, b, _opt) => Box::new(ops::Slice::new(input, a, b)),
+            IterateValues(_opt) => Box::new(ops::IterValues::new(input)),
             Iterate(thunks, _opt) => {
-                let iters = thunks.map(|t| t.prepare(input.clone())).collect();
-                OpIter::new(iters, t);
+                let mut inputs = Vec::new();
+                for thunk in thunks.into_iter() {
+                    inputs.push(thunk.prepare(input.repeat()));
+                }
+                Box::new(ops::Iter::new(inputs))
             },
             List(thunks, _opt) => {
-                let iters = thunks.map(|t| t.prepare(input.clone())).collect();
-                OpList::new(iters, t);
-            }
+                let mut inputs = Vec::new();
+                for thunk in thunks.into_iter() {
+                    inputs.push(thunk.prepare(input.repeat()));
+                }
+                Box::new(ops::List::new(inputs))
+            },
             Dict(thunks, _opt) => {
-                let iters = thunks.map(|t| t.prepare(input.clone())).collect();
-                OpDict::new(iters, t);
-            }
+                let mut inputs = Vec::new();
+                for (kt, vt) in thunks.into_iter() {
+                    inputs.push(
+                        (kt.prepare(input.repeat()), vt.prepare(input.repeat()))
+                    );
+                }
+                Box::new(ops::Dict::new(inputs))
+            },
 
-            Neg(thunk) => OpNeg::new(thunk.prepare(input), t),
-            Not(thunk) => OpNot::new(thunk.prepare(input), t),
+            Neg(thunk) => Box::new(ops::Neg::new(thunk.prepare(input))),
+            Not(thunk) => Box::new(ops::Not::new(thunk.prepare(input))),
 
-            Mult(lthunk, rthunk) => {
-                let l = lthunk.prepare(input.clone());
-                OpMult::new(l, rthunk.prepare(input), t)
+            Mul(lthunk, rthunk) => {
+                let lhs = lthunk.prepare(input.repeat());
+                let rhs = rthunk.prepare(input.repeat());
+                Box::new(ops::Mul::new(lhs, rhs))
             },
             Div(lthunk, rthunk) => {
-                let l = lthunk.prepare(input.clone());
-                OpDiv::new(l, rthunk.prepare(input), t)
+                let lhs = lthunk.prepare(input.repeat());
+                let rhs = rthunk.prepare(input.repeat());
+                Box::new(ops::Div::new(lhs, rhs))
             },
             Rem(lthunk, rthunk) => {
-                let l = lthunk.prepare(input.clone());
-                OpRem::new(l, rthunk.prepare(input), t)
+                let lhs = lthunk.prepare(input.repeat());
+                let rhs = rthunk.prepare(input.repeat());
+                Box::new(ops::Rem::new(lhs, rhs))
             },
             Add(lthunk, rthunk) => {
-                let l = lthunk.prepare(input.clone());
-                OpAdd::new(l, rthunk.prepare(input), t)
+                let lhs = lthunk.prepare(input.repeat());
+                let rhs = rthunk.prepare(input.repeat());
+                Box::new(ops::Add::new(lhs, rhs))
             },
             Sub(lthunk, rthunk) => {
-                let l = lthunk.prepare(input.clone());
-                OpSub::new(l, rthunk.prepare(input), t)
+                let lhs = lthunk.prepare(input.repeat());
+                let rhs = rthunk.prepare(input.repeat());
+                Box::new(ops::Sub::new(lhs, rhs))
             },
             Shr(lthunk, rthunk) => {
-                let l = lthunk.prepare(input.clone());
-                OpShr::new(l, rthunk.prepare(input), t)
+                let lhs = lthunk.prepare(input.repeat());
+                let rhs = rthunk.prepare(input.repeat());
+                Box::new(ops::Shr::new(lhs, rhs))
             },
             Shl(lthunk, rthunk) => {
-                let l = lthunk.prepare(input.clone());
-                OpShl::new(l, rthunk.prepare(input), t)
+                let lhs = lthunk.prepare(input.repeat());
+                let rhs = rthunk.prepare(input.repeat());
+                Box::new(ops::Shl::new(lhs, rhs))
             },
             BitAnd(lthunk, rthunk) => {
-                let l = lthunk.prepare(input.clone());
-                OpBitand::new(l, rthunk.prepare(input), t)
+                let lhs = lthunk.prepare(input.repeat());
+                let rhs = rthunk.prepare(input.repeat());
+                Box::new(ops::Bitand::new(lhs, rhs))
             },
             BitXor(lthunk, rthunk) => {
-                let l = lthunk.prepare(input.clone());
-                OpBitxor::new(l, rthunk.prepare(input), t)
+                let lhs = lthunk.prepare(input.repeat());
+                let rhs = rthunk.prepare(input.repeat());
+                Box::new(ops::Bitxor::new(lhs, rhs))
             },
             BitOr(lthunk, rthunk) => {
-                let l = lthunk.prepare(input.clone());
-                OpBitor::new(l, rthunk.prepare(input), t)
+                let lhs = lthunk.prepare(input.repeat());
+                let rhs = rthunk.prepare(input.repeat());
+                Box::new(ops::Bitor::new(lhs, rhs))
             },
             Eq(lthunk, rthunk) => {
-                let l = lthunk.prepare(input.clone());
-                OpEq::new(l, rthunk.prepare(input), t)
+                let lhs = lthunk.prepare(input.repeat());
+                let rhs = rthunk.prepare(input.repeat());
+                Box::new(ops::Eq::new(lhs, rhs))
             },
             Ne(lthunk, rthunk) => {
-                let l = lthunk.prepare(input.clone());
-                OpNe::new(l, rthunk.prepare(input), t)
+                let lhs = lthunk.prepare(input.repeat());
+                let rhs = rthunk.prepare(input.repeat());
+                Box::new(ops::Ne::new(lhs, rhs))
             },
             Lt(lthunk, rthunk) => {
-                let l = lthunk.prepare(input.clone());
-                OpLt::new(l, rthunk.prepare(input), t)
+                let lhs = lthunk.prepare(input.repeat());
+                let rhs = rthunk.prepare(input.repeat());
+                Box::new(ops::Lt::new(lhs, rhs))
             },
             Le(lthunk, rthunk) => {
-                let l = lthunk.prepare(input.clone());
-                OpLe::new(l, rthunk.prepare(input), t)
+                let lhs = lthunk.prepare(input.repeat());
+                let rhs = rthunk.prepare(input.repeat());
+                Box::new(ops::Le::new(lhs, rhs))
             },
             Gt(lthunk, rthunk) => {
-                let l = lthunk.prepare(input.clone());
-                OpGt::new(l, rthunk.prepare(input), t)
+                let lhs = lthunk.prepare(input.repeat());
+                let rhs = rthunk.prepare(input.repeat());
+                Box::new(ops::Gt::new(lhs, rhs))
             },
             Ge(lthunk, rthunk) => {
-                let l = lthunk.prepare(input.clone());
-                OpGe::new(l, rthunk.prepare(input), t)
+                let lhs = lthunk.prepare(input.repeat());
+                let rhs = rthunk.prepare(input.repeat());
+                Box::new(ops::Ge::new(lhs, rhs))
             },
             And(lthunk, rthunk) => {
-                let l = lthunk.prepare(input.clone());
-                OpAnd::new(l, rthunk.prepare(input), t)
+                let lhs = lthunk.prepare(input.repeat());
+                let rhs = rthunk.prepare(input.repeat());
+                Box::new(ops::And::new(lhs, rhs))
             },
             Or(lthunk, rthunk) => {
-                let l = lthunk.prepare(input.clone());
-                OpOr::new(l, rthunk.prepare(input), t)
+                let lhs = lthunk.prepare(input.repeat());
+                let rhs = rthunk.prepare(input.repeat());
+                Box::new(ops::Or::new(lhs, rhs))
             },
-            Pipe(lthunk, rthunk) => {
-                rthunk.prepare(lthunk.prepare(input))
-            },
+            Pipe(lthunk, rthunk) => rthunk.prepare(lthunk.prepare(input)),
 
             Builtin(name, thunks) => {
-                let args = thunks.map(|t| t.prepare(input.clone())).collect();
-                match name {
-                    "length" => BuiltinLength::new(args, t),
-                    "chars" => BuiltinChars::new(args, t),
-                    "keys" => BuiltinKeys::new(args, t),
-                    //"has" => BuiltinHas::new(args, t),
-                    //"in" => BuiltinIn::new(args, t),
-                    //"map" => BuiltinMap::new(args, t),
-                    //"any" => BuiltinAny::new(args, t),
-                    //"all" => BuiltinAll::new(args, t),
+                let mut args = Vec::new();
+                for thunk in thunks.into_iter() {
+                    args.push(thunk.prepare(input.repeat()))
                 }
-            }
+                match name.as_str() {
+                    "length" => Box::new(ops::BuiltinLength::new(args)),
+                    "chars" => Box::new(ops::BuiltinChars::new(args)),
+                    "keys" => Box::new(ops::BuiltinKeys::new(args)),
+                    //"has" => BuiltinHas::new(args),
+                    //"in" => BuiltinIn::new(args),
+                    //"map" => BuiltinMap::new(args),
+                    //"any" => BuiltinAny::new(args),
+                    //"all" => BuiltinAll::new(args),
+                    _ => unreachable!(), // TODO: implement BuiltinInvalid
+                }
+            },
         }
     }
 }
@@ -210,7 +229,7 @@ impl FromStr for Thunk {
     fn from_str(text: &str) -> Result<Thunk,String> {
         use nom::simple_errors::Context as NomContext;
 
-        let res = parse_program_nom(NS(text))?;
+        let res = parse_program_nom(NS(text));
         match res {
             Ok((_x, thunk)) => Ok(thunk),
             Err(err) => match err {

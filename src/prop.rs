@@ -104,6 +104,7 @@ pub fn search_by_key<D>(obj: &Vec<KeyValue<String,D>>, key: &str)
     if cmp == Equal { Ok(base) } else { Err(base + (cmp == Less) as usize) }
 }
 
+#[allow(dead_code)]
 pub fn upsert_object_key<D>(obj: &mut Vec<Property<D>>, kv: Property<D>)
     where D: Document
 {

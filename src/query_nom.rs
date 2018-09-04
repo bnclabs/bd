@@ -88,9 +88,9 @@ fn nom_json_string(text: NS) -> nom::IResult<NS, String> {
 //    BitAndExpr <- ('&') Shift
 //    Shift      <- Add ShiftExpr*
 //    ShiftExpr  <- ('<<' | '>>') Add
-//    Add        <- Mult AddExpr*
-//    AddExpr    <- ('+' | '-') Mult
-//    Mult       <- Primary MulExpr*
+//    Add        <- Mul AddExpr*
+//    AddExpr    <- ('+' | '-') Mul
+//    Mul        <- Primary MulExpr*
 //    MulExpr    <- ('*'|'/'|'%') Primary
 //    Primary    <- '(' Expr ')'
 //                | nom_literal
@@ -342,7 +342,7 @@ named!(nom_mult_div_rem(NS) -> Thunk,
             //println!("............ mult {:?} {:?}", lhs, op_thunks);
             for (op, rhs) in op_thunks {
                 lhs = match *op {
-                    "*" => Thunk::Mult(Box::new(lhs), Box::new(rhs)),
+                    "*" => Thunk::Mul(Box::new(lhs), Box::new(rhs)),
                     "/" => Thunk::Div(Box::new(lhs), Box::new(rhs)),
                     "%" => Thunk::Rem(Box::new(lhs), Box::new(rhs)),
                     _ => unreachable!(),
@@ -629,7 +629,7 @@ named!(nom_primary_expr(NS) -> Thunk,
 
 fn nom_empty_program(text: NS) -> nom::IResult<NS, Thunk> {
     if text.len() == 0 {
-        return Ok((NS(&text[..]), Thunk::Empty(Box::new(PanicIter{}))))
+        return Ok((NS(&text[..]), Thunk::Empty))
     }
     let ctxt = nom::Context::Code(text, nom::ErrorKind::Custom(0));
     return Err(nom::Err::Error(ctxt))
@@ -737,14 +737,4 @@ fn check_next_byte(text: NS, b: u8) -> nom::IResult<NS, ()> {
 
 pub fn parse_program_nom<'a>(s: NS<'a>) -> IResult<NS<'a>, Thunk> {
     nom_program(s)
-}
-
-struct PanicIter {}
-
-impl Iterator for PanicIter {
-    type Item=bool;
-
-    fn next(&mut self) -> Option<bool> {
-        panic!("cannot call this place holder iterator");
-    }
 }
