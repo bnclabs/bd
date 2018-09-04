@@ -17,6 +17,7 @@ extern crate regex;
 //pub mod context;
 pub mod db;
 pub mod entry;
+mod input_mem;
 pub mod json;
 mod lex;
 pub mod meta;
@@ -25,8 +26,9 @@ mod ops;
 mod prop;
 pub mod query;
 mod query_nom;
-//pub mod source_mem;
 mod util;
+
+pub use input_mem::InputMem;
 
 #[cfg(test)]
 mod tests {

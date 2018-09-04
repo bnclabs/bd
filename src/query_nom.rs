@@ -735,6 +735,6 @@ fn check_next_byte(text: NS, b: u8) -> nom::IResult<NS, ()> {
     Ok((text, ()))
 }
 
-pub fn parse_program_nom<'a>(s: NS<'a>) -> IResult<NS<'a>, Thunk> {
+pub(crate) fn parse_program_nom<'a>(s: NS<'a>) -> IResult<NS<'a>, Thunk> {
     nom_program(s)
 }

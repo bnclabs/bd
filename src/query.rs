@@ -14,8 +14,30 @@ use ops;
 //       and test cases is required.
 
 
+pub struct Expr {
+    thunk: Thunk,
+}
+
+impl Expr {
+    pub fn prepare<'a,D>(&'a self, input: Input<'a,D>) -> Input<'a,D>
+        where D: 'a + Document
+    {
+        return self.thunk.prepare(input)
+    }
+}
+
+impl FromStr for Expr {
+    type Err=String;
+
+    fn from_str(text: &str) -> Result<Expr,String> {
+        let thunk: Thunk = text.parse()?;
+        Ok(Expr{ thunk })
+    }
+}
+
+
 #[derive(Debug,Clone)]
-pub enum Thunk where {
+pub(crate) enum Thunk where {
     // Primary thunks
     Empty,
     Identity,
@@ -61,7 +83,7 @@ pub enum Thunk where {
 }
 
 impl Thunk {
-    pub fn prepare<'a, D>(self, input: Input<'a, D>) -> Input<D>
+    fn prepare<'a, D>(&'a self, input: Input<'a, D>) -> Input<D>
         where
         D: 'a + Document,
     {
@@ -72,34 +94,38 @@ impl Thunk {
             Recurse => Box::new(ops::Recurse::new(input)),
 
             Null(_opt) => Box::new(ops::Null::new(input)),
-            Bool(value, _opt) => Box::new(ops::Bool::new(input, value)),
-            Integer(value, _opt) => Box::new(ops::Integer::new(input, value)),
-            Float(value, _opt) => Box::new(ops::Float::new(input, value)),
-            String(value, _opt) => Box::new(ops::StringLit::new(input, value)),
+            Bool(value, _opt) => Box::new(ops::Bool::new(input, *value)),
+            Integer(value, _opt) => Box::new(ops::Integer::new(input, *value)),
+            Float(value, _opt) => Box::new(ops::Float::new(input, *value)),
+            String(value, _opt) => {
+                Box::new(ops::StringLit::new(input, value.clone()))
+            },
 
             IndexShortcut(s, n, _opt) => {
-                Box::new(ops::Index::new(input, s, n))
+                Box::new(ops::Index::new(input, s.clone(), *n))
             },
-            Identifier(s, _opt) => Box::new(ops::Identifier::new(input, s)),
-            Slice(a, b, _opt) => Box::new(ops::Slice::new(input, a, b)),
+            Identifier(s, _opt) => {
+                Box::new(ops::Identifier::new(input, s.clone()))
+            },
+            Slice(a, b, _opt) => Box::new(ops::Slice::new(input, *a, *b)),
             IterateValues(_opt) => Box::new(ops::IterValues::new(input)),
             Iterate(thunks, _opt) => {
                 let mut inputs = Vec::new();
-                for thunk in thunks.into_iter() {
+                for thunk in thunks.iter() {
                     inputs.push(thunk.prepare(input.repeat()));
                 }
                 Box::new(ops::Iter::new(inputs))
             },
             List(thunks, _opt) => {
                 let mut inputs = Vec::new();
-                for thunk in thunks.into_iter() {
+                for thunk in thunks.iter() {
                     inputs.push(thunk.prepare(input.repeat()));
                 }
                 Box::new(ops::List::new(inputs))
             },
             Dict(thunks, _opt) => {
                 let mut inputs = Vec::new();
-                for (kt, vt) in thunks.into_iter() {
+                for (kt, vt) in thunks.iter() {
                     inputs.push(
                         (kt.prepare(input.repeat()), vt.prepare(input.repeat()))
                     );
@@ -204,7 +230,7 @@ impl Thunk {
 
             Builtin(name, thunks) => {
                 let mut args = Vec::new();
-                for thunk in thunks.into_iter() {
+                for thunk in thunks.iter() {
                     args.push(thunk.prepare(input.repeat()))
                 }
                 match name.as_str() {
@@ -219,6 +245,7 @@ impl Thunk {
                     _ => unreachable!(), // TODO: implement BuiltinInvalid
                 }
             },
+            // _ => unreachable!(),
         }
     }
 }
