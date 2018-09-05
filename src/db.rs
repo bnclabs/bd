@@ -54,7 +54,7 @@ pub trait Document :
 
     fn len(&self) -> Option<usize>;
 
-    fn set(&mut self, key: &str, value: &Self);
+    fn set(&mut self, key: &str, value: Self);
 }
 
 pub trait And<Rhs=Self> {
@@ -128,5 +128,5 @@ pub trait ItemIterator<T> {
 }
 
 pub trait Append<T> { // T can be string, Vec<Document>, Vec<KeyValue>
-    fn append(&mut self, value: &T);
+    fn append(&mut self, value: T);
 }

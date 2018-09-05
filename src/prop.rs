@@ -4,9 +4,9 @@ use db::Document;
 
 
 #[derive(Debug,Clone)]
-pub struct KeyValue<K,D>(K, D) where K: PartialOrd , D: Document;
+pub struct KeyValue<K,D>(K, D) where K: Ord, D: Document;
 
-impl<K,D> KeyValue<K,D> where K: PartialOrd, D: Document {
+impl<K,D> KeyValue<K,D> where K: Ord, D: Document {
     #[inline]
     pub fn new(key: K, value: D) -> KeyValue<K,D> {
         KeyValue(key, value)
@@ -30,6 +30,11 @@ impl<K,D> KeyValue<K,D> where K: PartialOrd, D: Document {
     #[inline]
     pub fn value_ref(&self) -> &D {
         &self.1
+    }
+
+    #[inline]
+    pub fn key_value(self) -> (K, D) {
+        (self.0, self.1)
     }
 
     #[inline]
@@ -111,5 +116,84 @@ pub fn upsert_object_key<D>(obj: &mut Vec<Property<D>>, kv: Property<D>)
     match search_by_key(obj, kv.key_ref()) {
         Ok(off) => obj[off] = kv,
         Err(off) => obj.insert(off, kv),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_keyvalue() {
+        use json::Json;
+
+        let value: Json = From::from("value".to_string());
+        let prop = KeyValue::new("key".to_string(), value.clone());
+        assert_eq!(prop.key_ref(), "key");
+        assert_eq!(prop.value_ref(), &value);
+
+        let value: Json = From::from("value".to_string());
+        let prop = KeyValue::new("key".to_string(), value);
+        assert_eq!(prop.key(), "key".to_string());
+
+        let value: Json = From::from("value".to_string());
+        let prop = KeyValue::new("key".to_string(), value.clone());
+        assert_eq!(prop.value(), value);
+
+        let value: Json = From::from("value".to_string());
+        let prop = KeyValue::new("key".to_string(), value.clone());
+        assert_eq!(prop.key_value(), ("key".to_string(), value));
+
+        let value: Json = From::from("value".to_string());
+        let mut prop = KeyValue::new("key".to_string(), value);
+        let value: Json = From::from("another_value".to_string());
+        *prop.value_mut() = value.clone();
+        assert_eq!(prop.value(), value);
+
+        let value: Json = From::from("value".to_string());
+        let mut prop = KeyValue::new("key".to_string(), value);
+        let value: Json = From::from("yet_another_value".to_string());
+        prop.set_value(value.clone());
+        assert_eq!(prop.value(), value);
+    }
+
+    #[test]
+    fn test_sort_kv_array() {
+        use json::Json;
+
+        let mut props = vec![
+            ArrayItem::new(2, <Json as From<i128>>::from(3)),
+            ArrayItem::new(1, <Json as From<i128>>::from(3)),
+            ArrayItem::new(3, <Json as From<i128>>::from(3)),
+            ArrayItem::new(0, <Json as From<i128>>::from(3)),
+        ];
+        {
+            let x = props.as_mut_slice();
+            x.sort_by_key(|item| item.key_ref().clone());
+        }
+
+        let mut refstr = "[KeyValue(0, 3), KeyValue(1, 3), ".to_string();
+        refstr += "KeyValue(2, 3), KeyValue(3, 3)]";
+        assert_eq!(refstr, format!("{:?}", props));
+    }
+
+    #[test]
+    fn test_sort_kv_property() {
+        use json::Json;
+
+        let mut props = vec![
+            Property::new("b".to_string(), <Json as From<i128>>::from(3)),
+            Property::new("c".to_string(), <Json as From<i128>>::from(3)),
+            Property::new("z".to_string(), <Json as From<i128>>::from(3)),
+            Property::new("a".to_string(), <Json as From<i128>>::from(3)),
+        ];
+        {
+            let x = props.as_mut_slice();
+            x.sort_by_key(|item| item.key_ref().clone());
+        }
+
+        let mut refstr = r#"[KeyValue("a", 3), KeyValue("b", 3), "#.to_string();
+        refstr += r#"KeyValue("c", 3), KeyValue("z", 3)]"#;
+        assert_eq!(refstr, format!("{:?}", props));
     }
 }

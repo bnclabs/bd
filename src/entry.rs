@@ -21,8 +21,8 @@ impl<D> Entry<D> where D: Document {
     pub fn new_merged(entries: Vec<Entry<D>>, doc: D) -> Entry<D> {
         let mut entry = Entry::new_with_meta(Meta::new(), doc);
         for e in entries.into_iter() {
-            entry.meta.merge(&e.meta);
-            entry.op.merge(&e.op);
+            entry.meta.merge(e.meta);
+            entry.op.merge(e.op);
         }
         entry
     }
