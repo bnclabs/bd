@@ -463,7 +463,7 @@ fn check_eof(text: &str, lex: &mut Lex) -> Result<()> {
 }
 
 
-type Property = prop::Property<Json>;
+pub type Property = prop::Property<Json>;
 
 
 #[derive(Clone,PartialEq,PartialOrd)]
@@ -658,6 +658,10 @@ impl Value for Json {
         match self { Json::Bool(s) => Some(s), _ => None }
     }
 
+    fn string_ref(&self) -> Option<&String> {
+        match self { Json::String(s) => Some(s), _ => None }
+    }
+
     fn string(self) -> Option<String> {
         match self { Json::String(s) => Some(s), _ => None }
     }
@@ -832,16 +836,16 @@ impl Slice for Json {
 }
 
 impl Append<String> for Json {
-    fn append(&mut self, value: String) {
+    fn append(&mut self, value: &String) {
         match self {
-            Json::String(s) => s.push_str(&value),
+            Json::String(s) => s.push_str(value),
             _ => panic!("cannot append to {:?}", self.doctype()),
         }
     }
 }
 
 impl Append<Vec<Json>> for Json {
-    fn append(&mut self, values: Vec<Json>) {
+    fn append(&mut self, values: &Vec<Json>) {
         match self {
             Json::Array(arr) => {
                 values.iter().for_each(|val| arr.push(val.clone()))
@@ -852,10 +856,12 @@ impl Append<Vec<Json>> for Json {
 }
 
 impl Append<Vec<Property>> for Json {
-    fn append(&mut self, properties: Vec<Property>) {
+    fn append(&mut self, properties: &Vec<Property>) {
         match self {
             Json::Object(obj) => {
-                properties.into_iter().for_each(|prop| Json::insert(obj, prop))
+                for prop in properties.iter() {
+                    Json::insert(obj, prop.clone())
+                }
             }
             _ => panic!("cannot append to {:?}", self.doctype()),
         }

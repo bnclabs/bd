@@ -85,3 +85,23 @@ pub fn fixpositions<D>(mut entries: Vec<Entry<D>>)
     }
     entries
 }
+
+//#[cfg(test)]
+//mod tests {
+//    use super::*;
+//    use test::Bencher;
+//    use json::{Json,Property};
+//
+//    #[bench]
+//    fn bench_entry_new(b: &mut Bencher) {
+//        let doc: Json = <Json as From<Vec<Property>>>::from(Vec::new());
+//        b.iter(|| doc.clone());
+//    }
+//
+//    #[bench]
+//    fn bench_entry_new_meta(b: &mut Bencher) {
+//        let doc: Json = <Json as From<Vec<Property>>>::from(Vec::new());
+//        let doc: Json = <Json as From<Vec<Property>>>::from(Vec::new());
+//        b.iter(|| doc.clone());
+//    }
+//}

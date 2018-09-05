@@ -82,6 +82,8 @@ pub trait Value {
 
     fn boolean(self) -> Option<bool>;
 
+    fn string_ref(&self) -> Option<&String>;
+
     fn string(self) -> Option<String>;
 
     fn integer(self) -> Option<i128>;
@@ -126,5 +128,5 @@ pub trait ItemIterator<T> {
 }
 
 pub trait Append<T> { // T can be string, Vec<Document>, Vec<KeyValue>
-    fn append(&mut self, value: T);
+    fn append(&mut self, value: &T);
 }

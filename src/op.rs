@@ -31,21 +31,21 @@ impl<D> Op<D> where D: Document {
         self.0.set(key, &value)
     }
 
-    pub fn append(&mut self, key: &str, value: D) {
+    pub fn append(&mut self, key: &str, value: &D) {
         use db::Doctype::{Array, Object, String as S};
 
         let d = self.0.get_mut(key).unwrap();
         let (x, y) = (value.doctype(), d.doctype());
         match (x, y) {
-            (S, S) => d.append(value.string().unwrap()),
-            (Array, Array) => d.append(value.array().unwrap()),
-            (Object, Object) => d.append(value.object().unwrap()),
+            (S, S) => d.append(value.string_ref().unwrap()),
+            (Array, Array) => d.append(value.array_ref().unwrap()),
+            (Object, Object) => d.append(value.object_ref().unwrap()),
             _ => panic!("cannot append {:?} with {:?}", y, x),
         }
     }
 
     pub fn merge(&mut self, op: &Op<D>) {
-        self.append("errors", op.0.get_ref("errors").unwrap().clone());
+        self.append("errors", op.0.get_ref("errors").unwrap());
     }
 
     pub fn get_ref(&self, key: &str) -> Option<&D> {
