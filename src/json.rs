@@ -12,6 +12,7 @@ use util;
 
 include!("./json.rs.lookup");
 
+
 pub type Result<T> = result::Result<T,Error>;
 
 
@@ -27,7 +28,7 @@ pub enum Error {
 
 impl Error {
     fn key_missing_at(&self) -> usize {
-        match *self { Error::KeyMissing(at, _) => at, _ => unreachable!() }
+        match self { Error::KeyMissing(at, _) => *at, _ => unreachable!() }
     }
 }
 
@@ -76,18 +77,12 @@ pub struct JsonBuf {
 }
 
 impl JsonBuf {
-    fn init(s: Option<String>, l: Option<Lex>) -> JsonBuf {
-        let inner = match s { Some(val) => val, None => String::new() };
-        let lex = match l { Some(val) => val, None => Lex::new(0, 1, 1) };
-        JsonBuf { inner, lex }
-    }
-
     pub fn new() -> JsonBuf {
-        JsonBuf::init(None, None)
+        JsonBuf{inner: String::new(), lex: Lex::new(0, 1, 1)}
     }
 
     pub fn with_capacity(cap: usize) -> JsonBuf {
-        JsonBuf::init(Some(String::with_capacity(cap)), None)
+        JsonBuf{inner: String::with_capacity(cap), lex: Lex::new(0, 1, 1)}
     }
 
     pub fn iter<R>(r: R) -> Jsons<R> where R: io::Read {
@@ -107,14 +102,14 @@ impl JsonBuf {
     pub fn parse(&mut self) -> Result<Json> {
         self.lex.set(0, 1, 1);
         let val = parse_value(&self.inner, &mut self.lex)?;
-        self.inner = self.inner[self.lex.off..].to_string(); // remaining text.
+        self.inner.drain(..self.lex.off);
         Ok(val)
     }
 }
 
 impl From<String> for JsonBuf {
-    fn from(s: String) -> JsonBuf {
-        JsonBuf::init(Some(s), None)
+    fn from(inner: String) -> JsonBuf {
+        JsonBuf{inner, lex: Lex::new(0,1,1)}
     }
 }
 
@@ -152,7 +147,7 @@ impl<R> Iterator for Jsons<R> where R: io::Read {
         self.lex.set(0, 1, 1);
         loop {
             if let Ok(val) = parse_value(&self.inner, &mut self.lex) {
-                self.inner = self.inner[self.lex.off..].to_string();
+                self.inner.drain(..self.lex.off);
                 return Some(val)
             }
             let v = match self.reader.read(&mut self.buffer) {
@@ -244,8 +239,8 @@ fn parse_num(text: &str, lex: &mut Lex) -> Result<Json> {
     let mut is_float = false;
     for (i, ch) in text.char_indices() {
         match ch {
-            '0'..='9'|'+'|'-' => continue, // valid number
-            '.'|'e'|'E' => { is_float = true; continue}, // float number
+            '0'..='9'| '+'| '-' => continue, // valid number
+            '.' | 'e' | 'E' => { is_float = true; continue}, // float number
             _ => (),
         }
         return doparse(&text[..i], i, is_float)
@@ -1231,13 +1226,13 @@ mod tests {
 
     #[bench]
     fn bench_array(b: &mut Bencher) {
-	    let s = r#" [null,true,false,10,"tru\"e"]"#;
+            let s = r#" [null,true,false,10,"tru\"e"]"#;
         b.iter(|| {s.parse::<Json>().unwrap()});
     }
 
     #[bench]
     fn bench_map(b: &mut Bencher) {
-	    let s = r#"{"a": null,"b":true,"c":false,"d\"":-10E-1,"e":"tru\"e"}"#;
+        let s = r#"{"a":null,"b":true,"c":false,"d\"":-10E-1,"e":"tru\"e"}"#;
         b.iter(|| {s.parse::<Json>().unwrap()});
     }
 
@@ -1278,7 +1273,7 @@ mod tests {
 
     #[bench]
     fn bench_array_to_json(b: &mut Bencher) {
-	    let inp = r#" [null,true,false,10,"tru\"e"]"#;
+            let inp = r#" [null,true,false,10,"tru\"e"]"#;
         let val = inp.parse::<Json>().unwrap();
         let mut outs = String::with_capacity(64);
         b.iter(|| {outs.clear(); write!(outs, "{}", val)});
@@ -1286,7 +1281,7 @@ mod tests {
 
     #[bench]
     fn bench_map_to_json(b: &mut Bencher) {
-	    let inp = r#"{"a": null,"b":true,"c":false,"d\"":-10E-1,"e":"tru\"e"}"#;
+        let inp = r#"{"a":null,"b":true,"c":false,"d\"":-10E-1,"e":"tru\"e"}"#;
         let val = inp.parse::<Json>().unwrap();
         let mut outs = String::with_capacity(64);
         b.iter(|| {outs.clear(); write!(outs, "{}", val)});
