@@ -47,6 +47,7 @@ impl<D> Entry<D> where D: Document {
 
 
 
+#[derive(Debug,Eq,PartialEq,PartialOrd,Ord)]
 pub enum IterPosition {
     Item,
     Next,
@@ -72,36 +73,42 @@ pub fn fixpositions<D>(mut entries: Vec<Entry<D>>)
 {
     entries.iter_mut().for_each(
         |e| e.op.set(
-            "iterpos",
-            <D as From<i128>>::from(From::from(IterPosition::Item))
+            "iterpos", <D as From<i128>>::from(From::from(IterPosition::Item))
         )
     );
     let n = entries.len();
     if n > 1 {
         entries[n-1].op.set(
-            "iterpos",
-            <D as From<i128>>::from(From::from(IterPosition::End))
+            "iterpos", <D as From<i128>>::from(From::from(IterPosition::End))
         );
     }
     entries
 }
 
-//#[cfg(test)]
-//mod tests {
-//    use super::*;
-//    use test::Bencher;
-//    use json::{Json,Property};
-//
-//    #[bench]
-//    fn bench_entry_new(b: &mut Bencher) {
-//        let doc: Json = <Json as From<Vec<Property>>>::from(Vec::new());
-//        b.iter(|| doc.clone());
-//    }
-//
-//    #[bench]
-//    fn bench_entry_new_meta(b: &mut Bencher) {
-//        let doc: Json = <Json as From<Vec<Property>>>::from(Vec::new());
-//        let doc: Json = <Json as From<Vec<Property>>>::from(Vec::new());
-//        b.iter(|| doc.clone());
-//    }
-//}
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use test::Bencher;
+    use json::{Json,Property};
+
+    #[test]
+    fn test_iterposition() {
+        let val: i128 = From::from(IterPosition::Item);
+        let pos: IterPosition = From::from(val);
+        assert_eq!(pos, From::from(IterPosition::Item));
+
+        let val: i128 = From::from(IterPosition::Next);
+        let pos: IterPosition = From::from(val);
+        assert_eq!(pos, From::from(IterPosition::Next));
+
+        let val: i128 = From::from(IterPosition::End);
+        let pos: IterPosition = From::from(val);
+        assert_eq!(pos, From::from(IterPosition::End));
+    }
+
+    #[bench]
+    fn bench_entry_new(b: &mut Bencher) {
+        let doc: Json = <Json as From<Vec<Property>>>::from(Vec::new());
+        b.iter(|| doc.clone());
+    }
+}

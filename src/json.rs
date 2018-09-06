@@ -544,7 +544,7 @@ impl From<Vec<Json>> for Json {
 
 impl From<Vec<Property>> for Json {
     fn from(vals: Vec<Property>) -> Json {
-        let mut props: Vec<Property> = vec![];
+        let mut props: Vec<Property> = Vec::with_capacity(vals.len());
         vals.into_iter().for_each(|val| Json::insert(&mut props, val));
         Json::Object(props)
     }
@@ -978,7 +978,7 @@ impl Add for Json {
                 S(s)
             }
             (Array(l), Array(r)) => {
-                let mut a = vec![];
+                let mut a = Vec::with_capacity(l.len() + r.len());
                 a.extend_from_slice(&l);
                 a.extend_from_slice(&r);
                 Array(a)

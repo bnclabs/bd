@@ -7,12 +7,7 @@ use query_nom::parse_program_nom;
 use db::{Document, Input};
 use ops;
 
-// TODO: Parametrise Thunk over different types of Document.
 // TODO: Better to replace panic with assert!() macro.
-// TODO: Don't use vec![] macro, try to use with_capacity.
-// TODO: ? operator is not consistent and intuitive, a through review
-//       and test cases is required.
-
 
 pub struct Expr {
     thunk: Thunk,
