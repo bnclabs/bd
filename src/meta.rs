@@ -67,11 +67,10 @@ impl<D> Meta<D> where D: Document {
             self.0 = Some(<D as From<Vec<Property<D>>>>::from(Vec::new()));
         }
 
-        let d = meta.0.unwrap().object().unwrap();
-        for prop in d.into_iter() {
-            let (key, value) = prop.key_value();
-            self.append(&key, value);
-        }
+        let d = meta.0.unwrap();
+        self.append("domains", d.get_ref("domains").unwrap().clone());
+        self.append("sources", d.get_ref("sources").unwrap().clone());
+        self.append("keys", d.get_ref("keys").unwrap().clone());
     }
 
     pub fn get_ref(&self, key: &str) -> Option<&D> {
@@ -91,7 +90,7 @@ mod tests {
 
     #[test]
     fn test_meta() {
-        use json::{Json, Property};
+        use json::{Json};
         use db::Value;
 
         let mut meta: Meta<Json> = Meta::new();
@@ -105,31 +104,14 @@ mod tests {
         assert_eq!(Meta::none(), meta);
 
         let mut m = Meta::new();
-        m.set("key_string", Json::String("hello".to_string()));
-        m.append("key_string", Json::String(" world".to_string()));
-        let value = m.get_ref("key_string").unwrap().clone();
-        assert_eq!("hello world", value.string_ref().unwrap());
-
-        m.set("key_array", Json::Array(vec![]));
-        m.append("key_array", Json::Array(vec![Json::null()]));
-        let value = m.get_ref("key_array").unwrap().clone();
+        m.set("domains", Json::Array(vec![]));
+        m.append("domains", Json::Array(vec![Json::null()]));
+        let value = m.get_ref("domains").unwrap().clone();
         assert_eq!(vec![Json::null()], value.array_ref().unwrap().clone());
-
-        let prop = Property::new("key".to_string(), Json::null());
-        m.set("key_object", Json::Object(Vec::new()));
-        m.append("key_object", Json::Object(vec![prop.clone()]));
-        let value = m.get_ref("key_object").unwrap().clone();
-        let refval: Json = From::from(vec![
-            Property::new("key".to_string(), Json::null()),
-        ]);
-        assert_eq!(refval, value.clone());
 
         let mut meta: Meta<Json> = Meta::new();
         meta.merge(m);
-        let mut refval = r#"Meta(Some({"domains":[],"#.to_string();
-        refval += r#""key_array":[null],"#;
-        refval += r#""key_object":{"key":null},"key_string":"hello world","#;
-        refval += r#""keys":[],"sources":[]}))"#;
+        let refval = r#"Meta(Some({"domains":[null],"keys":[],"sources":[]}))"#;
         assert_eq!(refval, format!("{:?}", meta));
     }
 }

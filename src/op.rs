@@ -4,7 +4,7 @@ use entry::IterPosition;
 use util;
 
 
-#[derive(Clone)]
+#[derive(Debug,Clone,PartialEq,PartialOrd)] // TODO: revisit Debug
 pub struct Op<D>(D) where D: Document;
 
 pub const KEYS: [&'static str; 2] = [ "errors", "iterpos" ];
@@ -58,5 +58,31 @@ impl<D> Op<D> where D: Document {
 
     pub fn into<T>(self) -> Op<T> where T: Document + From<D> {
         Op(From::from(self.0))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_op() {
+        use json::{Json};
+        use db::Value;
+
+        let mut op: Op<Json> = Op::new();
+        assert_eq!(op.get_ref("errors").unwrap().array_ref().unwrap().len(), 0);
+        assert_eq!(op.get_ref("iterpos").unwrap().clone().integer().unwrap(), 1);
+        let err: Vec<Json> = vec![From::from("my error".to_string())];
+        op.set("errors", From::from(err));
+
+        let mut o = Op::with(op.0.clone());
+        assert_eq!(op, o);
+
+        o.append("errors", Json::Array(vec![Json::null()]));
+        op.merge(o);
+        let mut r = r#"Op({"errors":["my error","my error",null],"#.to_string();
+        r += r#""iterpos":1})"#;
+        assert_eq!(r, format!("{:?}", op));
     }
 }

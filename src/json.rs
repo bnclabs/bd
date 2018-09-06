@@ -498,10 +498,11 @@ impl Json {
         write!(w, "\"")
     }
 
-    fn insert(obj: &mut Vec<Property>, prop: Property) {
-        let off = search_by_key(obj, prop.key_ref())
-            .unwrap_or_else(|e| e.key_missing_at());
-        obj.insert(off, prop)
+    fn insert(props: &mut Vec<Property>, prop: Property) {
+        match search_by_key(props, prop.key_ref()) {
+            Ok(off) => props[off] = prop,
+            Err(err) => props.insert(err.key_missing_at(), prop),
+        };
     }
 }
 
@@ -857,9 +858,9 @@ impl Append<Vec<Json>> for Json {
 impl Append<Vec<Property>> for Json {
     fn append(&mut self, properties: Vec<Property>) {
         match self {
-            Json::Object(obj) => {
+            Json::Object(props) => {
                 for prop in properties.into_iter() {
-                    Json::insert(obj, prop)
+                    Json::insert(props, prop)
                 }
             }
             _ => panic!("cannot append to {:?}", self.doctype()),
